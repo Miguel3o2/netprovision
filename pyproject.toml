@@ -8,6 +8,7 @@ select = ["E", "F", "W", "I", "B"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["B011"]          # assert False is fine in tests
+"api/server.py" = ["B008"]    # FastAPI dependencies are declared as argument defaults
 
 [tool.mypy]
 python_version = "3.10"
@@ -21,6 +22,8 @@ files = [
     "models.py",
     "transport.py",
     "observability.py",
+    "auth.py",
+    "verify.py",
     "api",
     "inventory",
     "provisioner",

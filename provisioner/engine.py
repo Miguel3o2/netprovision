@@ -45,6 +45,7 @@ from models import (
     VLANProvisionRequest,
 )
 from observability import METRICS, reset_job_id, set_job_id
+from verify import capture_snapshot, verify_request
 
 log = logging.getLogger(__name__)
 
@@ -526,6 +527,8 @@ def execute(
     device_map:    dict[str, DeviceCredentials],
     *,
     auto_rollback: bool = True,
+    verify_after_apply: bool = True,
+    capture_pre_state:  bool = True,
     locks:         Optional[DeviceLocks] = None,
     claims:        Optional[VlanClaims] = None,
 ) -> ProvisioningJob:
@@ -533,8 +536,9 @@ def execute(
     Execute a provisioning job against real devices.
 
     Steps run in plan order (VLAN creation everywhere before any trunk/access
-    change). Every step is persisted as it completes. On failure the completed
-    steps are rolled back automatically unless `auto_rollback=False`.
+    change). Every step is persisted as it completes. The touched objects are
+    snapshotted first, the resulting state is verified afterwards, and completed
+    steps are rolled back on failure unless `auto_rollback=False`.
     """
     locks  = locks or DEVICE_LOCKS
     claims = claims or VLAN_CLAIMS
@@ -558,7 +562,16 @@ def execute(
         store.write_job(job)
 
         connections = _Connections(device_map)
+
+        def send(host: str, command: str) -> str:
+            with locks.hold(host):
+                return connections.get(host).send_command(command, expect_string=r"#")
+
         try:
+            if capture_pre_state:
+                job.snapshot = capture_snapshot(job.request, send)
+                store.write_job(job)
+
             for number, step in enumerate(job.steps, start=1):
                 if step.device not in device_map:
                     step.timestamp = _now()
@@ -592,10 +605,22 @@ def execute(
                     store.write_job(job)
 
             if job.steps and all(s.success for s in job.steps):
-                connections.save_all(locks)
-                job.status       = JobStatus.SUCCESS
-                job.completed_at = _now()
-                _update_inventory_after_success(job, store)
+                failed = _verify_and_record(job, send) if verify_after_apply else []
+                if failed:
+                    job.status       = JobStatus.FAILED
+                    job.completed_at = _now()
+                    details = "; ".join(
+                        f"{check['check']} on {check['device']}: "
+                        f"expected {check['expected']}, got {check['actual']}"
+                        for check in failed
+                    )
+                    job.error = f"post-change verification failed: {details}"
+                    log.error(f"{job.job_id}: {job.error}")
+                else:
+                    connections.save_all(locks)
+                    job.status       = JobStatus.SUCCESS
+                    job.completed_at = _now()
+                    _update_inventory_after_success(job, store)
             else:
                 job.status = JobStatus.FAILED
                 job.completed_at = _now()
@@ -609,7 +634,8 @@ def execute(
         store.write_job(job)
         log.info(
             f"{job.job_id}: {job.status.value} in {time.monotonic() - started:.1f}s "
-            f"({job.steps_succeeded}/{len(job.steps)} steps)"
+            f"({job.steps_succeeded}/{len(job.steps)} steps, "
+            f"{len(job.verification)} checks)"
         )
         return job
 
@@ -638,6 +664,15 @@ def _finish(
     job.completed_at = _now()
     store.write_job(job)
     return job
+
+
+def _verify_and_record(job: ProvisioningJob, send) -> list[dict]:
+    """Run post-change checks, persist them on the job, return the failures."""
+    checks = [check.as_dict() for check in verify_request(job.request, send)]
+    job.verification = checks
+    passed = sum(1 for check in checks if check["ok"])
+    log.info(f"{job.job_id}: {passed}/{len(checks)} verification checks passed")
+    return [check for check in checks if not check["ok"]]
 
 
 def rollback(

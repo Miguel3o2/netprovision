@@ -6,6 +6,7 @@ from inventory.collector import (
     _parse_vlan_range,
     apply_trunk_output,
     parse_interfaces_status,
+    parse_trunk_allowed,
     parse_version,
     parse_vlans,
 )
@@ -70,6 +71,18 @@ def test_trunk_output_does_not_create_section_headers_as_interfaces():
     assert set(ifaces) == {"Gi0/1", "Gi0/2", "Fa0/5"}
     assert ifaces["Gi0/1"].trunk_vlans == [1, 10, 11, 12, 30]
     assert ifaces["Gi0/1"].native_vlan == 99
+
+
+def test_parse_trunk_allowed_is_a_pure_parser():
+    allowed = parse_trunk_allowed(TRUNK_OUTPUT)
+
+    assert allowed == {"Gi0/1": [1, 10, 11, 12, 30]}
+
+
+def test_parse_trunk_allowed_ignores_section_headers():
+    allowed = parse_trunk_allowed(TRUNK_OUTPUT)
+    assert "Port" not in allowed
+    assert "Vlans" not in allowed
 
 
 def test_parse_vlans_handles_unsupported_and_names():

@@ -1,7 +1,7 @@
 services:
   api:
     build: .
-    image: netprovision:0.2.0
+    image: netprovision:0.3.0
     ports:
       - "8002:8002"
     volumes:
@@ -11,6 +11,14 @@ services:
     environment:
       NP_LOG_FORMAT: json
       NP_DB_PATH: /app/data/inventory.db
+      # Set these in the host environment (or a .env file next to compose):
+      #   NP_AUTH_MODE=apikey
+      #   NP_API_KEYS="alice:<token>:operator,bob:<token>:approver"
+      #   NP_REQUIRE_APPROVAL=true
+      NP_AUTH_MODE: ${NP_AUTH_MODE:-off}
+      NP_API_KEYS: ${NP_API_KEYS:-}
+      NP_REQUIRE_APPROVAL: ${NP_REQUIRE_APPROVAL:-false}
+      NP_SEPARATION_OF_DUTIES: ${NP_SEPARATION_OF_DUTIES:-true}
     restart: unless-stopped
 
 volumes:

@@ -182,7 +182,10 @@ METRICS.declare("np_process_uptime_seconds", "gauge",
 
 def _seed_defaults() -> None:
     """Emit zero-valued series so dashboards see metrics before the first event."""
-    for status in ("pending", "running", "success", "failed", "rolledback"):
+    for status in (
+        "pending_approval", "pending", "running", "success",
+        "failed", "rolledback", "cancelled",
+    ):
         METRICS.set("np_jobs_total", 0, {"status": status})
     for result in ("ok", "failed"):
         METRICS.set("np_steps_total", 0, {"result": result})

@@ -87,10 +87,29 @@ def run(
     port: int | None = None,
 ) -> None:
     from api.server import build_app
+    from auth import AuthConfig
     from inventory.store import InventoryStore
 
     raw = load_config(config_path)
     devices, device_map = load_devices(raw)
+
+    try:
+        auth_config = AuthConfig.from_env()
+    except ValueError as exc:
+        raise SystemExit(f"Authentication configuration error: {exc}") from exc
+
+    if auth_config.enabled:
+        log.info(f"Authentication: apikey ({len(auth_config.keys)} key(s) configured)")
+    else:
+        log.warning(
+            "NP_AUTH_MODE=off — the API is unauthenticated. "
+            "Set NP_AUTH_MODE=apikey and NP_API_KEYS outside a lab."
+        )
+
+    require_approval = os.getenv("NP_REQUIRE_APPROVAL", "").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+    log.info(f"Approval workflow: {'required' if require_approval else 'not required'}")
 
     store = InventoryStore(path=db_path)
     log.info(f"Inventory store: {db_path}")
@@ -104,7 +123,7 @@ def run(
                 collect(creds, store)
 
         import uvicorn
-        app = build_app(store, device_map)
+        app = build_app(store, device_map, auth_config=auth_config)
 
         api_cfg = raw.get("api", {})
         host = host or os.getenv("NP_HOST") or api_cfg.get("host", "0.0.0.0")

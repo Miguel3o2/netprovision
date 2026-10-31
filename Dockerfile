@@ -9,7 +9,7 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY main.py models.py transport.py observability.py ./
+COPY main.py models.py transport.py observability.py auth.py verify.py ./
 COPY api ./api
 COPY inventory ./inventory
 COPY provisioner ./provisioner

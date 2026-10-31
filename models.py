@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Optional
+from typing import Any, Optional
 
 
 class DeviceType(Enum):
@@ -36,11 +36,13 @@ class VLANStatus(Enum):
 
 
 class JobStatus(Enum):
+    PENDING_APPROVAL = "pending_approval"
     PENDING   = "pending"
     RUNNING   = "running"
     SUCCESS   = "success"
     FAILED    = "failed"
     ROLLEDBACK= "rolledback"
+    CANCELLED = "cancelled"
 
 
 class OperationType(Enum):
@@ -163,6 +165,19 @@ class ProvisioningJob:
     completed_at:Optional[datetime]     = None
     error:       Optional[str]          = None
     steps_total: int                    = 0   # known even when steps are not loaded
+
+    # Approval workflow
+    approved_by:      str                = ""
+    approved_at:      Optional[datetime] = None
+    approval_comment: str                = ""
+
+    # Evidence captured around execution
+    snapshot:     dict[str, Any]        = field(default_factory=dict)
+    verification: list[dict[str, Any]]  = field(default_factory=list)
+
+    @property
+    def verification_passed(self) -> bool:
+        return bool(self.verification) and all(c.get("ok") for c in self.verification)
 
     @property
     def steps_attempted(self) -> int:

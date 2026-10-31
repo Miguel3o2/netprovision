@@ -173,14 +173,14 @@ def parse_interfaces_status(
     return ifaces
 
 
-def apply_trunk_output(
-    device: str,
-    text:   str,
-    ifaces: dict[str, InterfaceRecord],
-    now:    Optional[datetime] = None,
-) -> None:
-    """Parse the 'Vlans allowed on trunk' table of `show interfaces trunk`."""
-    now = now or datetime.now(timezone.utc)
+def parse_trunk_allowed(text: str) -> dict[str, list[int]]:
+    """
+    Parse the 'Vlans allowed on trunk' table of `show interfaces trunk`.
+
+    Used by both the inventory collector and post-change verification, so both
+    agree on what "the trunk allows VLAN 40" means.
+    """
+    allowed: dict[str, list[int]] = {}
     in_allowed = False
 
     for raw in text.splitlines():
@@ -199,8 +199,20 @@ def apply_trunk_output(
         parts = line.split()
         if len(parts) < 2 or not IFACE_RE.match(parts[0]):
             continue
-        iface_name = parts[0]
-        vlans = _parse_vlan_range(parts[1])
+        allowed[parts[0]] = _parse_vlan_range(parts[1])
+    return allowed
+
+
+def apply_trunk_output(
+    device: str,
+    text:   str,
+    ifaces: dict[str, InterfaceRecord],
+    now:    Optional[datetime] = None,
+) -> None:
+    """Fold `show interfaces trunk` data into an interface map."""
+    now = now or datetime.now(timezone.utc)
+
+    for iface_name, vlans in parse_trunk_allowed(text).items():
         if iface_name in ifaces:
             ifaces[iface_name].trunk_vlans = vlans
             ifaces[iface_name].mode = InterfaceMode.TRUNK

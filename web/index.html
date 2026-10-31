@@ -106,6 +106,10 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
 .fi{font-family:var(--mono);font-size:9px;color:var(--muted);display:flex;align-items:center;gap:4px}
 .fdot{width:5px;height:5px;border-radius:50%}
 
+/* ── Token ──────────────────────── */
+.token-input{background:var(--surface);border:1px solid var(--border2);color:var(--text);padding:3px 8px;font-family:var(--mono);font-size:10px;width:170px;outline:none;border-radius:2px}
+.token-input:focus{border-color:var(--blue)}
+
 @media(max-width:900px){.stats,.two-col,.three-col{grid-template-columns:1fr}.form-grid{grid-template-columns:1fr}}
 </style>
 </head>
@@ -120,6 +124,8 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
     <div class="nav-tab" onclick="showTab('jobs')">Jobs</div>
   </div>
   <div class="topbar-right">
+    <input class="token-input" id="api-token" type="password" placeholder="API token" autocomplete="off"
+           title="Bearer token. Kept in this browser only; leave blank when the API runs with NP_AUTH_MODE=off.">
     <div class="pulse"></div>
     <span class="clock" id="clock">--:--:--</span>
   </div>
@@ -238,7 +244,7 @@ SW-ACCESS:Gi0/1</textarea>
 
 <div class="footer">
   <div class="fi"><div class="fdot" style="background:var(--green)"></div>API: <span id="api-st">demo mode</span></div>
-  <div class="fi" style="margin-left:auto">NetProvision v1.0 · Docs: /docs</div>
+  <div class="fi" style="margin-left:auto">NetProvision v0.3.0 · Docs: /docs</div>
 </div>
 
 <script>
@@ -283,16 +289,28 @@ const SIM_VLANS = [
 ];
 
 // ── API helpers ───────────────────────────────────────────────────────────
+// The token is entered in the top bar and kept in this browser only.
+function apiToken(){return localStorage.getItem('np_token')||'';}
+function authHeaders(extra){
+  const headers = Object.assign({}, extra||{});
+  const token = apiToken();
+  if(token) headers['Authorization'] = 'Bearer '+token;
+  return headers;
+}
 async function apiGet(path) {
   try {
-    const r = await fetch(API+path,{signal:AbortSignal.timeout(3000)});
+    const r = await fetch(API+path,{headers:authHeaders(),signal:AbortSignal.timeout(3000)});
     if(r.ok){useAPI=true;return r.json();}
+    if(r.status===401||r.status===403){
+      document.getElementById('api-st').textContent='auth error '+r.status;
+      document.getElementById('api-st').style.color='var(--red)';
+    }
   } catch{}
   return null;
 }
 async function apiPost(path, body) {
   try {
-    const r = await fetch(API+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(8000)});
+    const r = await fetch(API+path,{method:'POST',headers:authHeaders({'Content-Type':'application/json'}),body:JSON.stringify(body),signal:AbortSignal.timeout(8000)});
     useAPI=true;
     return {ok:r.ok, status:r.status, data: await r.json().catch(()=>null)};
   } catch(e){return {ok:false,error:String(e)};}
@@ -397,37 +415,32 @@ function getFormData() {
   };
 }
 
-function previewPlan() {
-  const d = getFormData();
-  const steps = [];
-
-  d.switches.forEach(sw => {
-    steps.push({op:'VLAN_CREATE', device:sw, iface:null,
-      cmd:`configure terminal\nvlan ${d.vlan_id}\n name ${d.name}\nexit\nexit`,
-      rollback:`configure terminal\nno vlan ${d.vlan_id}\nexit`});
-  });
-  d.add_to_trunks.forEach(ref => {
-    const [sw,iface] = ref.split(':');
-    steps.push({op:'TRUNK_ADD_VLAN', device:sw, iface,
-      cmd:`configure terminal\ninterface ${iface}\n switchport trunk allowed vlan add ${d.vlan_id}\nexit\nexit`,
-      rollback:`configure terminal\ninterface ${iface}\n switchport trunk allowed vlan remove ${d.vlan_id}\nexit\nexit`});
-  });
-  d.access_ports.forEach(ref => {
-    const [sw,iface] = ref.split(':');
-    steps.push({op:'ACCESS_SET_VLAN', device:sw, iface,
-      cmd:`configure terminal\ninterface ${iface}\n switchport mode access\n switchport access vlan ${d.vlan_id}\nexit\nexit`,
-      rollback:`configure terminal\ninterface ${iface}\n switchport access vlan 1\nexit\nexit`});
-  });
-
+async function previewPlan() {
   const body = document.getElementById('plan-body');
-  body.innerHTML = steps.map((s,i) => `
+  body.textContent = 'Building plan...';
+
+  // The server owns planning: it validates against the inventory and computes
+  // the real rollback commands. Keep exactly one implementation of that logic.
+  const result = await apiPost('/api/vlans/plan', getFormData());
+  if(!result.ok) {
+    const detail = result.data?.detail?.errors || result.data?.detail || result.error || 'request failed';
+    body.innerHTML = `<span style="color:var(--red)">${Array.isArray(detail)?detail.join(' · '):detail}</span>`;
+    return;
+  }
+
+  const plan = result.data;
+  const warnings = (plan.warnings||[]).map(w =>
+    `<div style="color:var(--amber);font-size:10px;margin-bottom:4px">⚠ ${w}</div>`).join('');
+  body.innerHTML = warnings + plan.steps.map(s => `
     <div style="padding:8px 0;border-bottom:1px solid var(--border2)">
       <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">
-        <span class="badge b-blue">${s.op}</span>
-        <span style="font-family:var(--mono);font-size:10px">${s.device}${s.iface?' · '+s.iface:''}</span>
+        <span class="badge b-blue">${s.operation}</span>
+        <span style="font-family:var(--mono);font-size:10px">${s.device}${s.interface?' · '+s.interface:''}</span>
       </div>
-      <pre style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-left:2px;line-height:1.6">${s.cmd}</pre>
-      <div style="font-family:var(--mono);font-size:9px;color:var(--muted2);margin-top:2px">↩ rollback: ${s.rollback.split('\n')[1]?.trim()||'no vlan '+d.vlan_id}</div>
+      <pre style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-left:2px;line-height:1.6">${s.commands.join('\n')}</pre>
+      <div style="font-family:var(--mono);font-size:9px;color:var(--muted2);margin-top:2px">↩ rollback: ${
+        s.rollback_commands.length ? s.rollback_commands.join(' → ') : (s.rollback_note || 'manual revert required')
+      }</div>
     </div>`).join('');
 }
 
@@ -440,8 +453,11 @@ async function submitProvision() {
   const result = await apiPost('/api/vlans/provision', d);
   if(result.ok) {
     currentJobId = result.data.job_id;
-    status.textContent = `Job ${currentJobId.slice(0,8)} queued — ${result.data.steps} steps`;
-    status.style.color = 'var(--green)';
+    const approval = result.data.status === 'pending_approval';
+    status.textContent = approval
+      ? `Job ${currentJobId.slice(0,8)} queued for approval — nothing sent to a device yet`
+      : `Job ${currentJobId.slice(0,8)} queued — ${result.data.steps} steps`;
+    status.style.color = approval ? 'var(--amber)' : 'var(--green)';
     document.getElementById('job-id-label').textContent = currentJobId.slice(0,8);
     pollJob(currentJobId);
   } else {
@@ -457,17 +473,35 @@ async function pollJob(jobId) {
     const job = await apiGet(`/api/vlans/provision/${jobId}`);
     if(!job) return;
     renderJobStatus(job);
-    if(['success','failed','rolledback'].includes(job.status)) clearInterval(jobPollTimer);
+    if(['success','failed','rolledback','cancelled','pending_approval'].includes(job.status)) {
+      clearInterval(jobPollTimer);
+    }
   }, 1500);
 }
 
 function renderJobStatus(job) {
-  const stCls = job.status==='success'?'b-green':job.status==='failed'?'b-red':job.status==='rolledback'?'b-amber':'b-muted';
+  const stCls = job.status==='success'?'b-green'
+    :job.status==='failed'||job.status==='cancelled'?'b-red'
+    :job.status==='rolledback'||job.status==='pending_approval'?'b-amber':'b-muted';
+  const approvalBtns = job.status==='pending_approval'
+    ? `<button class="btn btn-primary" style="margin-left:auto;padding:3px 10px;font-size:10px" onclick="approveJob('${job.job_id}')">Approve</button>
+       <button class="btn btn-danger" style="padding:3px 10px;font-size:10px" onclick="rejectJob('${job.job_id}')">Reject</button>`
+    : '';
+  const checks = (job.verification||[]);
+  const checkSummary = checks.length
+    ? `<span style="font-size:10px;color:${checks.every(c=>c.ok)?'var(--green)':'var(--red)'}">${checks.filter(c=>c.ok).length}/${checks.length} checks OK</span>`
+    : '';
   let html = `<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
     <span class="badge ${stCls}">${job.status.toUpperCase()}</span>
     <span style="font-size:10px;color:var(--muted)">${job.steps_ok}/${job.steps_total} steps OK</span>
+    ${checkSummary}
+    ${job.approved_by?`<span style="font-size:10px;color:var(--muted)">approved by ${job.approved_by}</span>`:''}
     ${job.status==='failed'?`<button class="btn btn-danger" style="margin-left:auto;padding:3px 10px;font-size:10px" onclick="rollbackJob('${job.job_id}')">Rollback</button>`:''}
+    ${approvalBtns}
   </div>`;
+  html += checks.filter(c=>!c.ok).map(c =>
+    `<div style="font-size:10px;color:var(--red);margin-bottom:4px">✗ ${c.check} on ${c.device}: expected ${c.expected}, got ${c.actual}</div>`
+  ).join('');
   html += job.steps.map(s => {
     const ic = s.success?'si-ok':s.error?'si-fail':'si-wait';
     const sym = s.success?'✓':s.error?'✗':'·';
@@ -488,6 +522,27 @@ async function rollbackJob(jobId) {
   pollJob(jobId);
 }
 
+async function approveJob(jobId) {
+  const comment = prompt('Approval comment (change ticket / CAB reference):') || '';
+  const result = await apiPost(`/api/vlans/provision/${jobId}/approve`, {comment});
+  if(!result.ok) {
+    alert(result.data?.detail || 'Approval failed — check your role and that the job is still pending.');
+    return;
+  }
+  pollJob(jobId);
+}
+
+async function rejectJob(jobId) {
+  const comment = prompt('Reason for rejection:') || '';
+  const result = await apiPost(`/api/vlans/provision/${jobId}/reject`, {comment});
+  if(!result.ok) {
+    alert(result.data?.detail || 'Rejection failed — check your role.');
+    return;
+  }
+  const job = await apiGet(`/api/vlans/provision/${jobId}`);
+  if(job) renderJobStatus(job);
+}
+
 // ── Jobs tab ──────────────────────────────────────────────────────────────
 async function loadJobs() {
   const data = await apiGet('/api/jobs?limit=50');
@@ -496,7 +551,9 @@ async function loadJobs() {
   const tbody = document.getElementById('jobs-tbody');
   tbody.innerHTML = '';
   jobs.forEach(j => {
-    const stCls = j.status==='success'?'b-green':j.status==='failed'?'b-red':j.status==='pending'?'b-muted':'b-amber';
+    const stCls = j.status==='success'?'b-green'
+      :j.status==='failed'||j.status==='cancelled'?'b-red'
+      :j.status==='rolledback'||j.status==='pending_approval'?'b-amber':'b-muted';
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td style="font-family:var(--mono);font-size:10px;color:var(--muted)">${j.job_id.slice(0,8)}</td>
@@ -520,6 +577,15 @@ async function viewJob(jobId) {
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────
+const tokenInput = document.getElementById('api-token');
+tokenInput.value = apiToken();
+tokenInput.addEventListener('change', () => {
+  localStorage.setItem('np_token', tokenInput.value.trim());
+  document.getElementById('api-st').textContent = 'checking...';
+  document.getElementById('api-st').style.color = '';
+  loadInventory(); loadVlans(); loadJobs();
+});
+
 loadInventory();
 </script>
 </body>

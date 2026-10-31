@@ -39,6 +39,7 @@ from typing import Optional
 try:
     from fastapi import (
         BackgroundTasks,
+        Depends,
         FastAPI,
         Header,
         HTTPException,
@@ -53,6 +54,7 @@ try:
 except ImportError:  # pragma: no cover - exercised when fastapi is absent
     FASTAPI_AVAILABLE = False
 
+from auth import AuthConfig, Principal, Unauthorized, authenticate
 from inventory.store import InventoryStore
 from models import (
     DeviceCredentials,
@@ -74,8 +76,15 @@ from provisioner.engine import (
     validate,
 )
 
-APP_VERSION = "0.2.0"
+APP_VERSION = "0.3.0"
 IDEMPOTENCY_KEY_RE = r"^[A-Za-z0-9_.:\-]{1,64}$"
+
+
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
 # ── Pydantic request bodies ───────────────────────────────────────────────────
@@ -89,6 +98,11 @@ if FASTAPI_AVAILABLE:
         access_ports:  list[str]  = Field(default_factory=list)
         description:   str        = ""
         requested_by:  str        = "api"
+
+    class FeedbackRequest(BaseModel):
+        """Approval or rejection comment."""
+
+        comment: str = Field(default="", max_length=500)
 
 
 def _to_request(body: "ProvisionRequest") -> VLANProvisionRequest:
@@ -110,9 +124,22 @@ if FASTAPI_AVAILABLE:
         media_type = "application/json; charset=utf-8"
 
 
-def build_app(store: InventoryStore, device_map: dict[str, DeviceCredentials]) -> "FastAPI":
+def build_app(
+    store: InventoryStore,
+    device_map: dict[str, DeviceCredentials],
+    *,
+    auth_config: Optional[AuthConfig] = None,
+    require_approval: Optional[bool] = None,
+    separation_of_duties: Optional[bool] = None,
+) -> "FastAPI":
     if not FASTAPI_AVAILABLE:
         raise RuntimeError("pip install fastapi uvicorn")
+
+    auth_config = auth_config or AuthConfig.from_env()
+    if require_approval is None:
+        require_approval = _env_flag("NP_REQUIRE_APPROVAL", False)
+    if separation_of_duties is None:
+        separation_of_duties = _env_flag("NP_SEPARATION_OF_DUTIES", True)
 
     app = FastAPI(
         title="NetProvision",
@@ -120,12 +147,32 @@ def build_app(store: InventoryStore, device_map: dict[str, DeviceCredentials]) -
         default_response_class=Utf8JSONResponse,
     )
 
+    # ── Authorisation dependency ──────────────────────────────────────────────
+
+    def require(permission: str):
+        """Require a permission, mapping auth failures to 401/403."""
+
+        def dependency(authorization: Optional[str] = Header(default=None)) -> Principal:
+            try:
+                principal = authenticate(authorization, auth_config)
+            except Unauthorized as exc:
+                raise HTTPException(
+                    401, str(exc), headers={"WWW-Authenticate": "Bearer"},
+                ) from exc
+            if not principal.can(permission):
+                raise HTTPException(
+                    403, f"role '{principal.role}' is not allowed to {permission}",
+                )
+            return principal
+
+        return dependency
+
     origins = [o.strip() for o in os.getenv("NP_CORS_ORIGINS", "*").split(",") if o.strip()]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=origins or ["*"],
         allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type", "Idempotency-Key", "X-Request-ID"],
+        allow_headers=["Content-Type", "Idempotency-Key", "X-Request-ID", "Authorization"],
     )
 
     # ── Observability middleware ──────────────────────────────────────────────
@@ -150,7 +197,7 @@ def build_app(store: InventoryStore, device_map: dict[str, DeviceCredentials]) -
 
     # ── Provisioning — dry run ────────────────────────────────────────────────
 
-    @app.post("/api/vlans/plan")
+    @app.post("/api/vlans/plan", dependencies=[Depends(require("read"))])
     def plan_vlan(body: "ProvisionRequest"):
         """Build the exact command plan and warnings without touching a device."""
         req = _to_request(body)
@@ -176,6 +223,7 @@ def build_app(store: InventoryStore, device_map: dict[str, DeviceCredentials]) -
         background_tasks: BackgroundTasks,
         response:         Response,
         idempotency_key:  Optional[str] = Header(default=None, alias="Idempotency-Key"),
+        principal:        Principal = Depends(require("write")),
     ):
         if idempotency_key is not None and not _valid_idempotency_key(idempotency_key):
             raise HTTPException(400, "Idempotency-Key must be 1-64 characters of [A-Za-z0-9_.:-]")
@@ -187,15 +235,20 @@ def build_app(store: InventoryStore, device_map: dict[str, DeviceCredentials]) -
                 return {**_job_to_dict(existing), "replayed": True}
 
         req = _to_request(body)
+        if auth_config.enabled:
+            # The authenticated identity wins over a client-supplied string.
+            req.requested_by = principal.name
+
         errors = validate(req, store, device_map)
         if errors:
             raise HTTPException(422, detail={"errors": errors})
 
         steps, warnings = inspect_request(req, store)
+        initial_status = JobStatus.PENDING_APPROVAL if require_approval else JobStatus.PENDING
         job = ProvisioningJob(
             job_id      = str(uuid.uuid4()),
             request     = req,
-            status      = JobStatus.PENDING,
+            status      = initial_status,
             steps       = steps,
             created_at  = datetime.now(timezone.utc),
             steps_total = len(steps),
@@ -211,6 +264,20 @@ def build_app(store: InventoryStore, device_map: dict[str, DeviceCredentials]) -
             response.status_code = 200
             return {**_job_to_dict(existing), "replayed": True}
 
+        if require_approval:
+            return {
+                "job_id":            job.job_id,
+                "status":            job.status.value,
+                "steps":             len(steps),
+                "warnings":          warnings,
+                "approval_required": True,
+                "requested_by":      req.requested_by,
+                "message": (
+                    f"VLAN {req.vlan_id} ({req.name}) queued for approval — "
+                    f"nothing has been sent to a device"
+                ),
+            }
+
         background_tasks.add_task(execute, job, store, device_map)
 
         return {
@@ -218,17 +285,78 @@ def build_app(store: InventoryStore, device_map: dict[str, DeviceCredentials]) -
             "status":    job.status.value,
             "steps":     len(steps),
             "warnings":  warnings,
+            "requested_by": req.requested_by,
             "message":   f"Provisioning VLAN {req.vlan_id} ({req.name}) — {len(steps)} steps queued",
         }
 
-    @app.get("/api/vlans/provision/{job_id}")
+    @app.get("/api/vlans/provision/{job_id}", dependencies=[Depends(require("read"))])
     def get_job_status(job_id: str):
         job = store.get_job(job_id)
         if not job:
             raise HTTPException(404, f"Job '{job_id}' not found")
         return _job_to_dict(job)
 
-    @app.post("/api/vlans/provision/{job_id}/rollback")
+    # ── Approval workflow ─────────────────────────────────────────────────────
+
+    @app.post("/api/vlans/provision/{job_id}/approve")
+    def approve_job(
+        job_id:           str,
+        body:            "FeedbackRequest",
+        background_tasks: BackgroundTasks,
+        principal:        Principal = Depends(require("approve")),
+    ):
+        job = store.get_job(job_id)
+        if not job:
+            raise HTTPException(404, f"Job '{job_id}' not found")
+        if job.status is not JobStatus.PENDING_APPROVAL:
+            raise HTTPException(
+                409, f"Job is in state '{job.status.value}', not awaiting approval",
+            )
+        if separation_of_duties and job.request.requested_by == principal.name:
+            raise HTTPException(
+                409, "separation of duties: the approver must differ from the requester",
+            )
+
+        job.approved_by      = principal.name
+        job.approved_at      = datetime.now(timezone.utc)
+        job.approval_comment = body.comment
+        job.status           = JobStatus.PENDING
+        store.write_job(job)
+
+        background_tasks.add_task(execute, job, store, device_map)
+        return {
+            "job_id":      job_id,
+            "status":      job.status.value,
+            "approved_by": principal.name,
+            "message":     "Approved — provisioning queued",
+        }
+
+    @app.post("/api/vlans/provision/{job_id}/reject")
+    def reject_job(
+        job_id:    str,
+        body:     "FeedbackRequest",
+        principal: Principal = Depends(require("approve")),
+    ):
+        job = store.get_job(job_id)
+        if not job:
+            raise HTTPException(404, f"Job '{job_id}' not found")
+        if job.status is not JobStatus.PENDING_APPROVAL:
+            raise HTTPException(
+                409, f"Job is in state '{job.status.value}', not awaiting approval",
+            )
+
+        reason = f"rejected by {principal.name}"
+        if body.comment:
+            reason += f": {body.comment}"
+        job.status           = JobStatus.CANCELLED
+        job.completed_at     = datetime.now(timezone.utc)
+        job.approved_by      = principal.name
+        job.approval_comment = body.comment
+        job.error            = reason
+        store.write_job(job)
+        return {"job_id": job_id, "status": job.status.value, "message": reason}
+
+    @app.post("/api/vlans/provision/{job_id}/rollback", dependencies=[Depends(require("write"))])
     def rollback_job(job_id: str, background_tasks: BackgroundTasks):
         job = store.get_job(job_id)
         if not job:
@@ -244,12 +372,12 @@ def build_app(store: InventoryStore, device_map: dict[str, DeviceCredentials]) -
 
     # ── Inventory — devices ───────────────────────────────────────────────────
 
-    @app.get("/api/inventory/devices")
+    @app.get("/api/inventory/devices", dependencies=[Depends(require("read"))])
     def list_devices():
         devices = store.list_devices()
         return [_device_summary(d, store) for d in devices]
 
-    @app.get("/api/inventory/devices/{hostname}")
+    @app.get("/api/inventory/devices/{hostname}", dependencies=[Depends(require("read"))])
     def get_device(hostname: str):
         device = store.get_device(hostname)
         if not device:
@@ -270,13 +398,13 @@ def build_app(store: InventoryStore, device_map: dict[str, DeviceCredentials]) -
             "vlan_count":      len(vlans),
         }
 
-    @app.get("/api/inventory/devices/{hostname}/interfaces")
+    @app.get("/api/inventory/devices/{hostname}/interfaces", dependencies=[Depends(require("read"))])
     def get_device_interfaces(hostname: str):
         if not store.get_device(hostname):
             raise HTTPException(404, f"Device '{hostname}' not in inventory")
         return [_iface_to_dict(i) for i in store.get_interfaces(hostname)]
 
-    @app.get("/api/inventory/devices/{hostname}/vlans")
+    @app.get("/api/inventory/devices/{hostname}/vlans", dependencies=[Depends(require("read"))])
     def get_device_vlans(hostname: str):
         if not store.get_device(hostname):
             raise HTTPException(404, f"Device '{hostname}' not in inventory")
@@ -284,11 +412,11 @@ def build_app(store: InventoryStore, device_map: dict[str, DeviceCredentials]) -
 
     # ── Inventory — VLANs ─────────────────────────────────────────────────────
 
-    @app.get("/api/inventory/vlans")
+    @app.get("/api/inventory/vlans", dependencies=[Depends(require("read"))])
     def list_vlans(device: Optional[str] = None):
         return [_vlan_to_dict(v) for v in store.get_vlans(device=device)]
 
-    @app.get("/api/inventory/vlans/{vlan_id}")
+    @app.get("/api/inventory/vlans/{vlan_id}", dependencies=[Depends(require("read"))])
     def get_vlan(vlan_id: int):
         vlans = [v for v in store.get_vlans() if v.vlan_id == vlan_id]
         if not vlans:
@@ -301,13 +429,13 @@ def build_app(store: InventoryStore, device_map: dict[str, DeviceCredentials]) -
             "interfaces": [_iface_to_dict(i) for i in ifaces],
         }
 
-    @app.get("/api/inventory/interfaces/vlan/{vlan_id}")
+    @app.get("/api/inventory/interfaces/vlan/{vlan_id}", dependencies=[Depends(require("read"))])
     def interfaces_for_vlan(vlan_id: int):
         return [_iface_to_dict(i) for i in store.find_interfaces_by_vlan(vlan_id)]
 
     # ── Inventory refresh ─────────────────────────────────────────────────────
 
-    @app.post("/api/inventory/refresh/{hostname}")
+    @app.post("/api/inventory/refresh/{hostname}", dependencies=[Depends(require("write"))])
     def refresh_inventory(hostname: str, background_tasks: BackgroundTasks):
         creds = device_map.get(hostname)
         if not creds:
@@ -318,7 +446,7 @@ def build_app(store: InventoryStore, device_map: dict[str, DeviceCredentials]) -
 
     # ── Jobs ──────────────────────────────────────────────────────────────────
 
-    @app.get("/api/jobs")
+    @app.get("/api/jobs", dependencies=[Depends(require("read"))])
     def list_jobs(
         limit:         int = Query(50, ge=1, le=200),
         offset:        int = Query(0, ge=0),
@@ -334,7 +462,7 @@ def build_app(store: InventoryStore, device_map: dict[str, DeviceCredentials]) -
             "jobs":   [_job_to_dict(j, include_steps=False) for j in jobs],
         }
 
-    @app.get("/api/jobs/{job_id}")
+    @app.get("/api/jobs/{job_id}", dependencies=[Depends(require("read"))])
     def get_job(job_id: str):
         job = store.get_job(job_id)
         if not job:
@@ -456,6 +584,11 @@ def _job_to_dict(job: ProvisioningJob, include_steps: bool = True) -> dict:
         "created_at":      job.created_at.isoformat() if job.created_at else None,
         "completed_at":    job.completed_at.isoformat() if job.completed_at else None,
         "error":           job.error,
+        "approved_by":     job.approved_by,
+        "approved_at":     job.approved_at.isoformat() if job.approved_at else None,
+        "approval_comment": job.approval_comment,
+        "verified":        job.verification_passed if job.verification else None,
+        "verification":    job.verification,
     }
     if include_steps:
         data["steps"] = [
@@ -476,4 +609,5 @@ def _job_to_dict(job: ProvisioningJob, include_steps: bool = True) -> dict:
             }
             for s in job.steps
         ]
+        data["snapshot"] = job.snapshot
     return data

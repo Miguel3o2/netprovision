@@ -97,8 +97,13 @@ CREATE INDEX IF NOT EXISTS idx_jobs_created ON provisioning_jobs(created_at);
 # Columns added after the first release. Kept additive so old databases migrate.
 MIGRATIONS: dict[str, dict[str, str]] = {
     "provisioning_jobs": {
-        "idempotency_key": "TEXT",
-        "steps_total":     "INTEGER DEFAULT 0",
+        "idempotency_key":  "TEXT",
+        "steps_total":      "INTEGER DEFAULT 0",
+        "snapshot":         "TEXT DEFAULT '{}'",
+        "verification":     "TEXT DEFAULT '[]'",
+        "approved_by":      "TEXT DEFAULT ''",
+        "approved_at":      "TEXT",
+        "approval_comment": "TEXT DEFAULT ''",
     },
 }
 
@@ -309,12 +314,17 @@ class InventoryStore:
                 INSERT INTO provisioning_jobs
                     (job_id, vlan_id, vlan_name, switches, add_to_trunks,
                      access_ports, requested_by, status, steps, steps_total,
-                     created_at, completed_at, error, idempotency_key)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     created_at, completed_at, error, idempotency_key,
+                     snapshot, verification, approved_by, approved_at,
+                     approval_comment)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(job_id) DO UPDATE SET
                     status=excluded.status, steps=excluded.steps,
                     steps_total=excluded.steps_total,
-                    completed_at=excluded.completed_at, error=excluded.error
+                    completed_at=excluded.completed_at, error=excluded.error,
+                    snapshot=excluded.snapshot, verification=excluded.verification,
+                    approved_by=excluded.approved_by, approved_at=excluded.approved_at,
+                    approval_comment=excluded.approval_comment
             """, (
                 job.job_id, req.vlan_id, req.name,
                 json.dumps(req.switches),
@@ -327,6 +337,11 @@ class InventoryStore:
                 job.completed_at.isoformat() if job.completed_at else None,
                 job.error,
                 idempotency_key,
+                json.dumps(job.snapshot),
+                json.dumps(job.verification),
+                job.approved_by,
+                job.approved_at.isoformat() if job.approved_at else None,
+                job.approval_comment,
             ))
 
     def get_job(self, job_id: str) -> Optional[ProvisioningJob]:
@@ -465,4 +480,26 @@ def _row_to_job(row: sqlite3.Row, with_steps: bool = True) -> ProvisioningJob:
         created_at   = datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
         completed_at = datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,
         error        = row["error"],
+        approved_by      = row["approved_by"] if "approved_by" in keys else "",
+        approved_at      = _parse_dt(row["approved_at"]) if "approved_at" in keys else None,
+        approval_comment = row["approval_comment"] if "approval_comment" in keys else "",
+        snapshot     = (
+            _parse_json(row["snapshot"], {})
+            if with_steps and "snapshot" in keys
+            else {}
+        ),
+        verification = _parse_json(row["verification"], []) if "verification" in keys else [],
     )
+
+
+def _parse_dt(value: Optional[str]) -> Optional[datetime]:
+    return datetime.fromisoformat(value) if value else None
+
+
+def _parse_json(value: Optional[str], default):
+    if not value:
+        return default
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return default
