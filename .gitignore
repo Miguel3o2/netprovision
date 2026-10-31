@@ -1,0 +1,31 @@
+# Local device credentials and runtime state — never commit these.
+config.yaml
+*.local.yaml
+.env
+
+# SQLite inventory / job history
+inventory.db
+*.db
+*.db-journal
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# Test / tooling caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

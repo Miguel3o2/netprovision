@@ -1,0 +1,525 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NetProvision — VLAN Provisioning & Network Inventory</title>
+<style>
+:root {
+  --bg:      #0d1117; --surface: #161b22; --panel: #1c2128;
+  --border:  #21262d; --border2: #2d333b;
+  --blue:    #388bfd; --blue-bg: rgba(56,139,253,.09);
+  --green:   #3fb950; --green-bg: rgba(63,185,80,.08);
+  --red:     #f85149; --red-bg: rgba(248,81,73,.09);
+  --amber:   #d29922; --amber-bg: rgba(210,153,34,.09);
+  --purple:  #bc8cff; --purple-bg: rgba(188,140,255,.08);
+  --text:    #c9d1d9; --muted: #6e7681; --muted2: #30363d;
+  --mono: 'JetBrains Mono','Fira Code',monospace;
+  --sans: 'Inter',system-ui,sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{font-size:13px}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh;padding-bottom:32px}
+
+/* ── Topbar ─────────────────────── */
+.topbar{height:50px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 20px;gap:12px;position:sticky;top:0;z-index:30}
+.logo{font-size:15px;font-weight:600;letter-spacing:-.02em}.logo span{color:var(--blue)}
+.nav-tabs{display:flex;gap:0;margin-left:24px}
+.nav-tab{padding:0 16px;height:50px;display:flex;align-items:center;font-size:12px;cursor:pointer;border-bottom:2px solid transparent;color:var(--muted);transition:all .15s}
+.nav-tab:hover{color:var(--text)}
+.nav-tab.active{color:var(--blue);border-bottom-color:var(--blue)}
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.pulse{width:7px;height:7px;border-radius:50%;background:var(--green);animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+.clock{font-family:var(--mono);font-size:11px;color:var(--blue)}
+
+/* ── Layout ─────────────────────── */
+.page{max-width:1400px;margin:0 auto;padding:16px 20px}
+.tab-content{display:none}.tab-content.active{display:block}
+
+/* ── Stats ──────────────────────── */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
+.stat{background:var(--panel);border:1px solid var(--border);padding:14px 16px;position:relative;overflow:hidden}
+.stat::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
+.stat.blue::before{background:var(--blue)}.stat.green::before{background:var(--green)}
+.stat.amber::before{background:var(--amber)}.stat.purple::before{background:var(--purple)}
+.stat-label{font-family:var(--mono);font-size:9px;color:var(--muted);letter-spacing:.06em;margin-bottom:6px}
+.stat-value{font-size:26px;font-weight:300;letter-spacing:-.03em;line-height:1;margin-bottom:4px}
+.stat-value.blue{color:var(--blue)}.stat-value.green{color:var(--green)}
+.stat-value.amber{color:var(--amber)}.stat-value.purple{color:var(--purple)}
+.stat-sub{font-family:var(--mono);font-size:9px;color:var(--muted)}
+
+/* ── Grid ───────────────────────── */
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px}
+
+/* ── Panel ──────────────────────── */
+.panel{background:var(--panel);border:1px solid var(--border);margin-bottom:14px}
+.ph{padding:11px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
+.ph-title{font-size:12px;font-weight:500}.ph-sub{font-family:var(--mono);font-size:9px;color:var(--muted)}
+
+/* ── Table ──────────────────────── */
+.tbl{width:100%;border-collapse:collapse}
+.tbl th{font-family:var(--mono);font-size:9px;color:var(--muted);padding:6px 14px;text-align:left;border-bottom:1px solid var(--border);letter-spacing:.05em}
+.tbl td{padding:8px 14px;font-size:11px;border-bottom:1px solid rgba(33,38,45,.6)}
+.tbl tr:hover td{background:var(--blue-bg)}
+.badge{font-family:var(--mono);font-size:9px;padding:1px 6px;border-radius:2px}
+.b-blue{background:var(--blue-bg);color:var(--blue);border:1px solid rgba(56,139,253,.25)}
+.b-green{background:var(--green-bg);color:var(--green);border:1px solid rgba(63,185,80,.2)}
+.b-red{background:var(--red-bg);color:var(--red);border:1px solid rgba(248,81,73,.25)}
+.b-amber{background:var(--amber-bg);color:var(--amber);border:1px solid rgba(210,153,34,.25)}
+.b-purple{background:var(--purple-bg);color:var(--purple);border:1px solid rgba(188,140,255,.2)}
+.b-muted{background:var(--muted2);color:var(--muted);border:1px solid var(--border2)}
+
+/* ── Form ───────────────────────── */
+.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:16px}
+.form-group{display:flex;flex-direction:column;gap:5px}
+.form-group.full{grid-column:1/-1}
+.form-label{font-size:11px;font-weight:500;color:var(--text)}
+.form-sub{font-size:10px;color:var(--muted);margin-top:1px}
+.form-input,.form-select{background:var(--surface);border:1px solid var(--border2);color:var(--text);padding:7px 10px;font-family:var(--sans);font-size:12px;width:100%;outline:none;border-radius:2px;transition:border .15s}
+.form-input:focus,.form-select:focus{border-color:var(--blue)}
+.form-textarea{background:var(--surface);border:1px solid var(--border2);color:var(--text);padding:7px 10px;font-family:var(--mono);font-size:11px;width:100%;outline:none;border-radius:2px;resize:vertical;min-height:70px;line-height:1.6}
+.form-textarea:focus{border-color:var(--blue)}
+.form-actions{padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:10px;align-items:center}
+.btn{padding:7px 16px;font-size:12px;font-weight:500;cursor:pointer;border-radius:2px;border:1px solid;transition:all .15s}
+.btn-primary{background:var(--blue);color:#fff;border-color:var(--blue)}
+.btn-primary:hover{opacity:.85}
+.btn-secondary{background:transparent;color:var(--muted);border-color:var(--border2)}
+.btn-secondary:hover{color:var(--text);border-color:var(--muted)}
+.btn-danger{background:transparent;color:var(--red);border-color:rgba(248,81,73,.4)}
+.btn-danger:hover{background:var(--red-bg)}
+
+/* ── Job status ─────────────────── */
+.job-status{display:flex;flex-direction:column;gap:8px;padding:14px}
+.step-row{display:flex;align-items:flex-start;gap:10px;padding:6px 0;border-bottom:1px solid rgba(33,38,45,.4)}
+.step-icon{width:16px;height:16px;border-radius:50%;flex-shrink:0;margin-top:1px;display:flex;align-items:center;justify-content:center;font-size:9px}
+.si-ok{background:var(--green-bg);color:var(--green);border:1px solid rgba(63,185,80,.3)}
+.si-fail{background:var(--red-bg);color:var(--red);border:1px solid rgba(248,81,73,.3)}
+.si-wait{background:var(--muted2);color:var(--muted);border:1px solid var(--border2)}
+.step-info{flex:1;min-width:0}
+.step-title{font-size:11px;font-weight:500}
+.step-cmd{font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:2px;white-space:pre;overflow-x:auto}
+
+/* ── Footer ─────────────────────── */
+.footer{height:28px;background:var(--surface);border-top:1px solid var(--border);display:flex;align-items:center;padding:0 20px;gap:16px;position:fixed;bottom:0;left:0;right:0;z-index:20}
+.fi{font-family:var(--mono);font-size:9px;color:var(--muted);display:flex;align-items:center;gap:4px}
+.fdot{width:5px;height:5px;border-radius:50%}
+
+@media(max-width:900px){.stats,.two-col,.three-col{grid-template-columns:1fr}.form-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="logo">Net<span>Provision</span></span>
+  <div class="nav-tabs">
+    <div class="nav-tab active" onclick="showTab('inventory')">Inventory</div>
+    <div class="nav-tab" onclick="showTab('vlans')">VLANs</div>
+    <div class="nav-tab" onclick="showTab('provision')">Provision</div>
+    <div class="nav-tab" onclick="showTab('jobs')">Jobs</div>
+  </div>
+  <div class="topbar-right">
+    <div class="pulse"></div>
+    <span class="clock" id="clock">--:--:--</span>
+  </div>
+</div>
+
+<!-- ── INVENTORY TAB ──────────────────────────────────────────── -->
+<div class="page tab-content active" id="tab-inventory">
+  <div class="stats">
+    <div class="stat blue"><div class="stat-label">DEVICES</div><div class="stat-value blue" id="s-devices">0</div><div class="stat-sub">in inventory</div></div>
+    <div class="stat green"><div class="stat-label">INTERFACES</div><div class="stat-value green" id="s-ifaces">0</div><div class="stat-sub">total ports</div></div>
+    <div class="stat amber"><div class="stat-label">VLANs</div><div class="stat-value amber" id="s-vlans">0</div><div class="stat-sub">unique across network</div></div>
+    <div class="stat purple"><div class="stat-label">TRUNK LINKS</div><div class="stat-value purple" id="s-trunks">0</div><div class="stat-sub">active trunks</div></div>
+  </div>
+
+  <div class="two-col">
+    <div>
+      <div class="panel">
+        <div class="ph"><span class="ph-title">Devices</span><span class="ph-sub" id="dev-sub">loading...</span></div>
+        <table class="tbl">
+          <thead><tr><th>Hostname</th><th>IP</th><th>Type</th><th>Interfaces</th><th>VLANs</th><th>Last seen</th></tr></thead>
+          <tbody id="dev-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div>
+      <div class="panel">
+        <div class="ph"><span class="ph-title">Interface detail</span><span class="ph-sub" id="iface-sub">click a device</span></div>
+        <table class="tbl">
+          <thead><tr><th>Interface</th><th>Mode</th><th>Status</th><th>VLAN / Allowed</th></tr></thead>
+          <tbody id="iface-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── VLANs TAB ──────────────────────────────────────────────── -->
+<div class="page tab-content" id="tab-vlans">
+  <div class="panel">
+    <div class="ph"><span class="ph-title">VLAN Database</span><span class="ph-sub" id="vlan-sub">all devices</span></div>
+    <table class="tbl">
+      <thead><tr><th>VLAN ID</th><th>Name</th><th>Device</th><th>Status</th><th>Discovered</th></tr></thead>
+      <tbody id="vlan-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ── PROVISION TAB ──────────────────────────────────────────── -->
+<div class="page tab-content" id="tab-provision">
+  <div class="two-col">
+    <div class="panel" style="margin-bottom:0">
+      <div class="ph"><span class="ph-title">Provision VLAN</span><span class="ph-sub">POST /api/vlans/provision</span></div>
+      <div class="form-grid">
+        <div class="form-group">
+          <label class="form-label">VLAN ID</label>
+          <input class="form-input" id="f-vid" type="number" min="2" max="4093" placeholder="40" value="40">
+          <span class="form-sub">2–4093, not reserved (1, 1002–1005)</span>
+        </div>
+        <div class="form-group">
+          <label class="form-label">VLAN Name</label>
+          <input class="form-input" id="f-name" placeholder="Finance" value="Finance">
+          <span class="form-sub">Max 32 chars, no spaces</span>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Create on switches</label>
+          <textarea class="form-textarea" id="f-switches" placeholder="SW-CORE&#10;SW-ACCESS">SW-CORE
+SW-ACCESS</textarea>
+          <span class="form-sub">One hostname per line</span>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Add to trunk interfaces</label>
+          <textarea class="form-textarea" id="f-trunks" placeholder="SW-CORE:Gi0/1&#10;SW-ACCESS:Gi0/1">SW-CORE:Gi0/1
+SW-ACCESS:Gi0/1</textarea>
+          <span class="form-sub">hostname:interface — one per line</span>
+        </div>
+        <div class="form-group full">
+          <label class="form-label">Assign to access ports</label>
+          <textarea class="form-textarea" id="f-access" placeholder="SW-ACCESS:Fa0/5" style="min-height:50px">SW-ACCESS:Fa0/5</textarea>
+          <span class="form-sub">hostname:interface — one per line — leave blank if not needed</span>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Requested by</label>
+          <input class="form-input" id="f-reqby" placeholder="engineer@company.com" value="engineer@company.com">
+        </div>
+      </div>
+      <div class="form-actions">
+        <button class="btn btn-primary" onclick="submitProvision()">Provision VLAN</button>
+        <button class="btn btn-secondary" onclick="previewPlan()">Preview plan</button>
+        <span id="form-status" style="font-size:11px;color:var(--muted)"></span>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel" id="plan-panel" style="margin-bottom:14px">
+        <div class="ph"><span class="ph-title">Command plan</span><span class="ph-sub">generated without SSH</span></div>
+        <div id="plan-body" style="padding:14px;font-size:11px;color:var(--muted)">Click "Preview plan" to see the commands that will be sent.</div>
+      </div>
+      <div class="panel" id="job-panel">
+        <div class="ph"><span class="ph-title">Job status</span><span class="ph-sub" id="job-id-label">—</span></div>
+        <div id="job-body" style="padding:14px;font-size:11px;color:var(--muted)">No job running.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── JOBS TAB ───────────────────────────────────────────────── -->
+<div class="page tab-content" id="tab-jobs">
+  <div class="panel">
+    <div class="ph"><span class="ph-title">Provisioning Jobs</span><span class="ph-sub" id="jobs-sub">recent 50</span></div>
+    <table class="tbl">
+      <thead><tr><th>Job ID</th><th>VLAN</th><th>Switches</th><th>Status</th><th>Steps</th><th>Created</th><th></th></tr></thead>
+      <tbody id="jobs-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="footer">
+  <div class="fi"><div class="fdot" style="background:var(--green)"></div>API: <span id="api-st">demo mode</span></div>
+  <div class="fi" style="margin-left:auto">NetProvision v1.0 · Docs: /docs</div>
+</div>
+
+<script>
+const API = '';
+let useAPI = false;
+let currentJobId = null;
+let jobPollTimer = null;
+
+// ── Sim data ──────────────────────────────────────────────────────────────
+const SIM_DEVICES = [
+  {hostname:'R1',       ip:'192.168.1.1',  device_type:'cisco_ios', model:'ISR4321', interface_count:5,  vlan_count:0,  trunk_count:1, last_seen:'2026-10-21T08:00:00Z', tags:{role:'router'}},
+  {hostname:'SW-CORE',  ip:'192.168.10.2', device_type:'cisco_ios', model:'WS-C2960', interface_count:26, vlan_count:4,  trunk_count:2, last_seen:'2026-10-21T08:00:05Z', tags:{role:'switch'}},
+  {hostname:'SW-ACCESS',ip:'192.168.10.3', device_type:'cisco_ios', model:'WS-C2960', interface_count:26, vlan_count:4,  trunk_count:1, last_seen:'2026-10-21T08:00:10Z', tags:{role:'switch'}},
+  {hostname:'SRV-DHCP', ip:'192.168.10.10',device_type:'cisco_ios', model:'Server',   interface_count:1,  vlan_count:0,  trunk_count:0, last_seen:'2026-10-21T08:00:12Z', tags:{role:'server'}},
+];
+const SIM_IFACES = {
+  'SW-CORE': [
+    {name:'Gi0/1', mode:'trunk',  status:'up',   trunk_vlans:[10,20,30,99], access_vlan:null},
+    {name:'Gi0/2', mode:'trunk',  status:'up',   trunk_vlans:[10,20,30,99], access_vlan:null},
+    {name:'Fa0/1', mode:'access', status:'up',   trunk_vlans:[], access_vlan:10},
+    {name:'Fa0/2', mode:'access', status:'down', trunk_vlans:[], access_vlan:20},
+    {name:'Vlan10',mode:'routed', status:'up',   trunk_vlans:[], access_vlan:null, ip_address:'192.168.10.2'},
+  ],
+  'SW-ACCESS': [
+    {name:'Gi0/1', mode:'trunk',  status:'up',   trunk_vlans:[10,20,30,99], access_vlan:null},
+    {name:'Fa0/1', mode:'access', status:'up',   trunk_vlans:[], access_vlan:20},
+    {name:'Fa0/2', mode:'access', status:'up',   trunk_vlans:[], access_vlan:20},
+    {name:'Fa0/3', mode:'access', status:'up',   trunk_vlans:[], access_vlan:30},
+    {name:'Fa0/4', mode:'access', status:'up',   trunk_vlans:[], access_vlan:10},
+    {name:'Fa0/5', mode:'access', status:'down', trunk_vlans:[], access_vlan:1},
+  ],
+};
+const SIM_VLANS = [
+  {vlan_id:10,name:'MGMT', device:'SW-CORE',   status:'active'},
+  {vlan_id:20,name:'STAFF',device:'SW-CORE',   status:'active'},
+  {vlan_id:30,name:'GUEST',device:'SW-CORE',   status:'active'},
+  {vlan_id:99,name:'NATIVE',device:'SW-CORE',  status:'active'},
+  {vlan_id:10,name:'MGMT', device:'SW-ACCESS', status:'active'},
+  {vlan_id:20,name:'STAFF',device:'SW-ACCESS', status:'active'},
+  {vlan_id:30,name:'GUEST',device:'SW-ACCESS', status:'active'},
+  {vlan_id:99,name:'NATIVE',device:'SW-ACCESS',status:'active'},
+];
+
+// ── API helpers ───────────────────────────────────────────────────────────
+async function apiGet(path) {
+  try {
+    const r = await fetch(API+path,{signal:AbortSignal.timeout(3000)});
+    if(r.ok){useAPI=true;return r.json();}
+  } catch{}
+  return null;
+}
+async function apiPost(path, body) {
+  try {
+    const r = await fetch(API+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(8000)});
+    useAPI=true;
+    return {ok:r.ok, status:r.status, data: await r.json().catch(()=>null)};
+  } catch(e){return {ok:false,error:String(e)};}
+}
+
+// ── Clock ─────────────────────────────────────────────────────────────────
+function tick(){document.getElementById('clock').textContent=new Date().toTimeString().slice(0,8);}
+tick();setInterval(tick,1000);
+
+// ── Tabs ──────────────────────────────────────────────────────────────────
+function showTab(name) {
+  document.querySelectorAll('.tab-content').forEach(el=>el.classList.remove('active'));
+  document.querySelectorAll('.nav-tab').forEach(el=>el.classList.remove('active'));
+  document.getElementById('tab-'+name).classList.add('active');
+  document.querySelectorAll('.nav-tab').forEach(el=>{
+    if(el.textContent.toLowerCase().includes(name.slice(0,3))) el.classList.add('active');
+  });
+  if(name==='inventory') loadInventory();
+  if(name==='vlans')     loadVlans();
+  if(name==='jobs')      loadJobs();
+}
+
+// ── Inventory ─────────────────────────────────────────────────────────────
+async function loadInventory() {
+  const devices = await apiGet('/api/inventory/devices') || SIM_DEVICES;
+  document.getElementById('api-st').textContent = useAPI?'live':'demo mode';
+
+  let totalIfaces=0, totalVlans=new Set(), totalTrunks=0;
+  devices.forEach(d=>{totalIfaces+=d.interface_count; totalVlans.add(d.vlan_count); totalTrunks+=d.trunk_count;});
+
+  document.getElementById('s-devices').textContent  = devices.length;
+  document.getElementById('s-ifaces').textContent   = totalIfaces;
+  document.getElementById('s-vlans').textContent    = devices.reduce((a,d)=>a+d.vlan_count,0);
+  document.getElementById('s-trunks').textContent   = totalTrunks;
+  document.getElementById('dev-sub').textContent    = devices.length+' devices';
+
+  const tbody = document.getElementById('dev-tbody');
+  tbody.innerHTML = '';
+  devices.forEach(d => {
+    const tr = document.createElement('tr');
+    tr.style.cursor = 'pointer';
+    tr.innerHTML = `
+      <td><strong>${d.hostname}</strong> <span style="font-size:10px;color:var(--muted)">${d.tags?.role||''}</span></td>
+      <td style="font-family:var(--mono);color:var(--muted)">${d.ip}</td>
+      <td><span class="badge b-muted">${d.device_type}</span></td>
+      <td style="font-family:var(--mono)">${d.interface_count}</td>
+      <td style="font-family:var(--mono)">${d.vlan_count}</td>
+      <td style="font-family:var(--mono);color:var(--muted)">${d.last_seen?new Date(d.last_seen).toTimeString().slice(0,8):'—'}</td>`;
+    tr.onclick = () => loadInterfaces(d.hostname);
+    tbody.appendChild(tr);
+  });
+}
+
+async function loadInterfaces(hostname) {
+  document.getElementById('iface-sub').textContent = hostname;
+  const ifaces = await apiGet(`/api/inventory/devices/${hostname}/interfaces`) || SIM_IFACES[hostname] || [];
+  const tbody = document.getElementById('iface-tbody');
+  tbody.innerHTML = '';
+  ifaces.forEach(i => {
+    const modeCls = i.mode==='trunk'?'b-blue':i.mode==='routed'?'b-purple':'b-muted';
+    const stCls   = i.status==='up'?'b-green':'b-red';
+    const vlanInfo = i.mode==='trunk'
+      ? (i.trunk_vlans?.length ? i.trunk_vlans.slice(0,6).join(', ')+(i.trunk_vlans.length>6?'…':'') : '—')
+      : (i.access_vlan||'—');
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td style="font-family:var(--mono)">${i.name}${i.ip_address?`<br><span style="color:var(--muted);font-size:9px">${i.ip_address}</span>`:''}</td>
+      <td><span class="badge ${modeCls}">${i.mode}</span></td>
+      <td><span class="badge ${stCls}">${i.status}</span></td>
+      <td style="font-family:var(--mono);font-size:10px;color:var(--muted)">${vlanInfo}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+// ── VLANs ─────────────────────────────────────────────────────────────────
+async function loadVlans() {
+  const vlans = await apiGet('/api/inventory/vlans') || SIM_VLANS;
+  document.getElementById('vlan-sub').textContent = vlans.length+' entries';
+  const tbody = document.getElementById('vlan-tbody');
+  tbody.innerHTML = '';
+  vlans.forEach(v => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td style="font-family:var(--mono);font-weight:600;color:var(--blue)">${v.vlan_id}</td>
+      <td><strong>${v.name}</strong></td>
+      <td style="font-family:var(--mono);color:var(--muted)">${v.device}</td>
+      <td><span class="badge b-green">${v.status}</span></td>
+      <td style="font-family:var(--mono);color:var(--muted)">${v.discovered?new Date(v.discovered).toTimeString().slice(0,8):'—'}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+// ── Provision form ────────────────────────────────────────────────────────
+function getFormData() {
+  return {
+    vlan_id:       parseInt(document.getElementById('f-vid').value),
+    name:          document.getElementById('f-name').value.trim(),
+    switches:      document.getElementById('f-switches').value.trim().split('\n').map(s=>s.trim()).filter(Boolean),
+    add_to_trunks: document.getElementById('f-trunks').value.trim().split('\n').map(s=>s.trim()).filter(Boolean),
+    access_ports:  document.getElementById('f-access').value.trim().split('\n').map(s=>s.trim()).filter(Boolean),
+    requested_by:  document.getElementById('f-reqby').value.trim() || 'api',
+  };
+}
+
+function previewPlan() {
+  const d = getFormData();
+  const steps = [];
+
+  d.switches.forEach(sw => {
+    steps.push({op:'VLAN_CREATE', device:sw, iface:null,
+      cmd:`configure terminal\nvlan ${d.vlan_id}\n name ${d.name}\nexit\nexit`,
+      rollback:`configure terminal\nno vlan ${d.vlan_id}\nexit`});
+  });
+  d.add_to_trunks.forEach(ref => {
+    const [sw,iface] = ref.split(':');
+    steps.push({op:'TRUNK_ADD_VLAN', device:sw, iface,
+      cmd:`configure terminal\ninterface ${iface}\n switchport trunk allowed vlan add ${d.vlan_id}\nexit\nexit`,
+      rollback:`configure terminal\ninterface ${iface}\n switchport trunk allowed vlan remove ${d.vlan_id}\nexit\nexit`});
+  });
+  d.access_ports.forEach(ref => {
+    const [sw,iface] = ref.split(':');
+    steps.push({op:'ACCESS_SET_VLAN', device:sw, iface,
+      cmd:`configure terminal\ninterface ${iface}\n switchport mode access\n switchport access vlan ${d.vlan_id}\nexit\nexit`,
+      rollback:`configure terminal\ninterface ${iface}\n switchport access vlan 1\nexit\nexit`});
+  });
+
+  const body = document.getElementById('plan-body');
+  body.innerHTML = steps.map((s,i) => `
+    <div style="padding:8px 0;border-bottom:1px solid var(--border2)">
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:4px">
+        <span class="badge b-blue">${s.op}</span>
+        <span style="font-family:var(--mono);font-size:10px">${s.device}${s.iface?' · '+s.iface:''}</span>
+      </div>
+      <pre style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-left:2px;line-height:1.6">${s.cmd}</pre>
+      <div style="font-family:var(--mono);font-size:9px;color:var(--muted2);margin-top:2px">↩ rollback: ${s.rollback.split('\n')[1]?.trim()||'no vlan '+d.vlan_id}</div>
+    </div>`).join('');
+}
+
+async function submitProvision() {
+  const d = getFormData();
+  const status = document.getElementById('form-status');
+  status.textContent = 'Submitting...';
+  status.style.color = 'var(--muted)';
+
+  const result = await apiPost('/api/vlans/provision', d);
+  if(result.ok) {
+    currentJobId = result.data.job_id;
+    status.textContent = `Job ${currentJobId.slice(0,8)} queued — ${result.data.steps} steps`;
+    status.style.color = 'var(--green)';
+    document.getElementById('job-id-label').textContent = currentJobId.slice(0,8);
+    pollJob(currentJobId);
+  } else {
+    const errors = result.data?.detail?.errors || [result.data?.detail || 'Request failed'];
+    status.textContent = errors.join(' · ');
+    status.style.color = 'var(--red)';
+  }
+}
+
+async function pollJob(jobId) {
+  clearInterval(jobPollTimer);
+  jobPollTimer = setInterval(async () => {
+    const job = await apiGet(`/api/vlans/provision/${jobId}`);
+    if(!job) return;
+    renderJobStatus(job);
+    if(['success','failed','rolledback'].includes(job.status)) clearInterval(jobPollTimer);
+  }, 1500);
+}
+
+function renderJobStatus(job) {
+  const stCls = job.status==='success'?'b-green':job.status==='failed'?'b-red':job.status==='rolledback'?'b-amber':'b-muted';
+  let html = `<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+    <span class="badge ${stCls}">${job.status.toUpperCase()}</span>
+    <span style="font-size:10px;color:var(--muted)">${job.steps_ok}/${job.steps_total} steps OK</span>
+    ${job.status==='failed'?`<button class="btn btn-danger" style="margin-left:auto;padding:3px 10px;font-size:10px" onclick="rollbackJob('${job.job_id}')">Rollback</button>`:''}
+  </div>`;
+  html += job.steps.map(s => {
+    const ic = s.success?'si-ok':s.error?'si-fail':'si-wait';
+    const sym = s.success?'✓':s.error?'✗':'·';
+    return `<div class="step-row">
+      <div class="step-icon ${ic}">${sym}</div>
+      <div class="step-info">
+        <div class="step-title">${s.operation} · ${s.device}${s.interface?' · '+s.interface:''}</div>
+        <div class="step-cmd">${s.command.replace(/\n/g,' → ')}</div>
+        ${s.error?`<div style="font-size:10px;color:var(--red);margin-top:2px">${s.error}</div>`:''}
+      </div>
+    </div>`;
+  }).join('');
+  document.getElementById('job-body').innerHTML = html;
+}
+
+async function rollbackJob(jobId) {
+  await apiPost(`/api/vlans/provision/${jobId}/rollback`, {});
+  pollJob(jobId);
+}
+
+// ── Jobs tab ──────────────────────────────────────────────────────────────
+async function loadJobs() {
+  const jobs = await apiGet('/api/jobs?limit=50') || [];
+  document.getElementById('jobs-sub').textContent = jobs.length+' jobs';
+  const tbody = document.getElementById('jobs-tbody');
+  tbody.innerHTML = '';
+  jobs.forEach(j => {
+    const stCls = j.status==='success'?'b-green':j.status==='failed'?'b-red':j.status==='pending'?'b-muted':'b-amber';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td style="font-family:var(--mono);font-size:10px;color:var(--muted)">${j.job_id.slice(0,8)}</td>
+      <td><strong>${j.vlan_id}</strong> <span style="color:var(--muted)">${j.vlan_name}</span></td>
+      <td style="font-family:var(--mono);font-size:10px">${j.switches.join(', ')}</td>
+      <td><span class="badge ${stCls}">${j.status}</span></td>
+      <td style="font-family:var(--mono)">${j.steps_ok}/${j.steps_total}</td>
+      <td style="font-family:var(--mono);color:var(--muted)">${j.created_at?new Date(j.created_at).toTimeString().slice(0,8):'—'}</td>
+      <td><button class="btn btn-secondary" style="padding:2px 8px;font-size:10px" onclick="viewJob('${j.job_id}')">View</button></td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+async function viewJob(jobId) {
+  showTab('provision');
+  const job = await apiGet(`/api/vlans/provision/${jobId}`);
+  if(job) {
+    document.getElementById('job-id-label').textContent = jobId.slice(0,8);
+    renderJobStatus(job);
+  }
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────
+loadInventory();
+</script>
+</body>
+</html>

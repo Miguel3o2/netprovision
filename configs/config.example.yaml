@@ -1,0 +1,43 @@
+# NetProvision Configuration — EXAMPLE
+#
+# Copy this file to config.yaml in the project root and edit the values:
+#     cp configs/config.example.yaml config.yaml
+#
+# config.yaml is git-ignored: credentials never belong in the repository.
+
+api:
+  host: 0.0.0.0
+  port: 8002
+
+devices:
+  - hostname:       SW-CORE
+    ip:             192.168.10.2
+    device_type:    cisco_ios
+    username:       admin
+    password:       CHANGE_ME
+    enable_secret:  CHANGE_ME
+    tags:
+      role:   switch
+      site:   head-office
+
+  - hostname:       SW-ACCESS
+    ip:             192.168.10.3
+    device_type:    cisco_ios
+    username:       admin
+    password:       CHANGE_ME
+    enable_secret:  CHANGE_ME
+    tags:
+      role:   switch
+      site:   head-office
+
+  # Routers work too — the provisioner only sends switchport commands
+  # to interfaces you explicitly list as trunks / access ports.
+  - hostname:       R1
+    ip:             192.168.1.1
+    device_type:    cisco_ios
+    username:       admin
+    password:       CHANGE_ME
+    enable_secret:  CHANGE_ME
+    tags:
+      role:   router
+      site:   head-office
