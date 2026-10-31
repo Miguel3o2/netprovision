@@ -3,10 +3,11 @@ Data models for NetProvision.
 """
 
 from __future__ import annotations
+
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import Enum
 from typing import Optional
-from datetime import datetime
 
 
 class DeviceType(Enum):
@@ -147,6 +148,9 @@ class OperationStep:
     error:          Optional[str]   = None
     timestamp:      Optional[datetime] = None
     rollback_cmd:   str             = ""   # command to undo this step
+    rollback_note:  str             = ""   # why a rollback is manual / skipped
+    rollback_applied: bool          = False
+    rollback_error: str             = ""
 
 
 @dataclass
@@ -158,6 +162,11 @@ class ProvisioningJob:
     created_at:  Optional[datetime]     = None
     completed_at:Optional[datetime]     = None
     error:       Optional[str]          = None
+    steps_total: int                    = 0   # known even when steps are not loaded
+
+    @property
+    def steps_attempted(self) -> int:
+        return sum(1 for s in self.steps if s.timestamp is not None)
 
     @property
     def steps_succeeded(self) -> int:
@@ -165,4 +174,4 @@ class ProvisioningJob:
 
     @property
     def steps_failed(self) -> int:
-        return sum(1 for s in self.steps if not s.success)
+        return sum(1 for s in self.steps if s.timestamp is not None and not s.success)

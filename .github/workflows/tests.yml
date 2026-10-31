@@ -1,4 +1,4 @@
-name: tests
+name: ci
 
 on:
   push:
@@ -22,10 +22,30 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements.txt -r requirements-dev.txt
 
-      - name: Run tests
+      - name: Tests (no third-party runner required)
         run: python tests/test_core.py
 
-      - name: Import smoke test
-        run: python -c "import main, api.server, provisioner.engine, inventory.collector; print('imports ok')"
+      - name: Tests (pytest + coverage gate)
+        run: >
+          pytest -q
+          --cov=models --cov=inventory --cov=provisioner --cov=api
+          --cov=transport --cov=observability --cov=main
+          --cov-report=term --cov-fail-under=80
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Type check
+        run: mypy
+
+      - name: Dependency audit
+        run: pip-audit -r requirements.txt
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t netprovision:ci .

@@ -5,28 +5,31 @@ Usage:
   python main.py                        # start API server
   python main.py --collect              # collect inventory then start
   python main.py --config myconfig.yaml
+
+Environment overrides:
+  NP_CONFIG, NP_DB_PATH, NP_HOST, NP_PORT, NP_LOG_FORMAT (text|json), NP_LOG_LEVEL
 """
 
 from __future__ import annotations
+
 import argparse
 import logging
-import sys
 import os
+import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-# Windows consoles default to cp1252; logs contain em dashes.
+# Windows consoles default to cp1252; log messages contain em dashes.
 for _stream in (sys.stdout, sys.stderr):
-    try:
-        _stream.reconfigure(encoding="utf-8", errors="replace")
-    except (AttributeError, ValueError):
-        pass
+    _reconfigure = getattr(_stream, "reconfigure", None)
+    if _reconfigure is not None:
+        try:
+            _reconfigure(encoding="utf-8", errors="replace")
+        except ValueError:
+            pass
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s — %(message)s",
-    datefmt="%H:%M:%S",
-)
+from observability import configure_logging  # noqa: E402  (after sys.path setup)
+
 log = logging.getLogger("netprovision")
 
 CONFIG_HINT = (
@@ -76,42 +79,63 @@ def load_devices(raw: dict) -> tuple[list, dict]:
     return devices, device_map
 
 
-def run(config_path: str = "config.yaml", collect_first: bool = False) -> None:
-    from inventory.store import InventoryStore
+def run(
+    config_path: str = "config.yaml",
+    collect_first: bool = False,
+    db_path: str = "inventory.db",
+    host: str | None = None,
+    port: int | None = None,
+) -> None:
     from api.server import build_app
+    from inventory.store import InventoryStore
 
     raw = load_config(config_path)
     devices, device_map = load_devices(raw)
 
-    db_path = "inventory.db"
-    store   = InventoryStore(path=db_path)
+    store = InventoryStore(path=db_path)
     log.info(f"Inventory store: {db_path}")
     log.info(f"Loaded {len(devices)} device(s) from {config_path}")
 
-    if collect_first and devices:
-        from inventory.collector import collect
-        log.info("Running initial inventory collection...")
-        for creds in devices:
-            collect(creds, store)
+    try:
+        if collect_first and devices:
+            from inventory.collector import collect
+            log.info("Running initial inventory collection...")
+            for creds in devices:
+                collect(creds, store)
 
-    import uvicorn
-    app = build_app(store, device_map)
+        import uvicorn
+        app = build_app(store, device_map)
 
-    api_cfg = raw.get("api", {})
-    host = api_cfg.get("host", "0.0.0.0")
-    port = api_cfg.get("port", 8002)
+        api_cfg = raw.get("api", {})
+        host = host or os.getenv("NP_HOST") or api_cfg.get("host", "0.0.0.0")
+        port = port or int(os.getenv("NP_PORT", 0)) or api_cfg.get("port", 8002)
 
-    log.info(f"API server: http://{host}:{port}")
-    log.info(f"Dashboard:  http://{host}:{port}/")
-    log.info(f"API docs:   http://{host}:{port}/docs")
+        log.info(f"API server: http://{host}:{port}")
+        log.info(f"Dashboard:  http://{host}:{port}/")
+        log.info(f"API docs:   http://{host}:{port}/docs")
 
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+        uvicorn.run(app, host=host, port=port, log_level="warning")
+    finally:
+        store.close()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="NetProvision")
-    parser.add_argument("--config",  default="config.yaml")
+    parser.add_argument("--config", default=os.getenv("NP_CONFIG", "config.yaml"))
+    parser.add_argument("--db", default=os.getenv("NP_DB_PATH", "inventory.db"))
+    parser.add_argument("--host", default=None)
+    parser.add_argument("--port", type=int, default=None)
+    parser.add_argument("--log-format", choices=["text", "json"],
+                        default=os.getenv("NP_LOG_FORMAT", "text"))
     parser.add_argument("--collect", action="store_true",
                         help="Collect inventory from all devices before starting")
     args = parser.parse_args()
-    run(args.config, collect_first=args.collect)
+
+    configure_logging(os.getenv("NP_LOG_LEVEL", "INFO"), args.log_format)
+    run(
+        config_path   = args.config,
+        collect_first = args.collect,
+        db_path       = args.db,
+        host          = args.host,
+        port          = args.port,
+    )

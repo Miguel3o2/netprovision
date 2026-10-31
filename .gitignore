@@ -22,7 +22,11 @@ dist/
 .ruff_cache/
 .mypy_cache/
 .coverage
+.coverage.*
 htmlcov/
+
+# Container / local data directory
+data/
 
 # Editors / OS
 .vscode/

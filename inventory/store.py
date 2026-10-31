@@ -1,25 +1,36 @@
 """
 Inventory Store
-===============
+==============
 SQLite-backed storage for:
   - devices         — hostname, IP, platform, model, serial
   - interfaces      — per-device interface records
   - vlans           — per-device VLAN database
   - provisioning_jobs — full audit trail of every provisioning operation
+
+Schema changes are additive and applied in place by `_migrate()`, so an
+existing inventory.db keeps working after an upgrade.
 """
 
 from __future__ import annotations
+
 import json
 import sqlite3
 import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Optional
 
 from models import (
-    DeviceRecord, InterfaceRecord, VLANRecord, ProvisioningJob,
-    InterfaceMode, InterfaceStatus, VLANStatus, JobStatus, OperationType,
+    DeviceRecord,
+    InterfaceMode,
+    InterfaceRecord,
+    InterfaceStatus,
+    JobStatus,
     OperationStep,
+    OperationType,
+    ProvisioningJob,
+    VLANRecord,
+    VLANStatus,
 )
 
 SCHEMA = """
@@ -80,7 +91,16 @@ CREATE TABLE IF NOT EXISTS provisioning_jobs (
     error        TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_vlan ON provisioning_jobs(vlan_id);
+CREATE INDEX IF NOT EXISTS idx_jobs_created ON provisioning_jobs(created_at);
 """
+
+# Columns added after the first release. Kept additive so old databases migrate.
+MIGRATIONS: dict[str, dict[str, str]] = {
+    "provisioning_jobs": {
+        "idempotency_key": "TEXT",
+        "steps_total":     "INTEGER DEFAULT 0",
+    },
+}
 
 
 class InventoryStore:
@@ -112,13 +132,35 @@ class InventoryStore:
                 if not self._memory:
                     conn.close()
 
-    def _init(self):
+    def _init(self) -> None:
         with self._lock:
             conn = self._raw_connect()
-            conn.executescript(SCHEMA)
-            conn.commit()
-            if not self._memory:
-                conn.close()
+            try:
+                conn.executescript(SCHEMA)
+                self._migrate(conn)
+                conn.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency "
+                    "ON provisioning_jobs(idempotency_key) "
+                    "WHERE idempotency_key IS NOT NULL"
+                )
+                conn.commit()
+            finally:
+                if not self._memory:
+                    conn.close()
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        for table, columns in MIGRATIONS.items():
+            existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+            for name, ddl in columns.items():
+                if name not in existing:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+
+    def close(self) -> None:
+        with self._lock:
+            if self._mem_conn is not None:
+                self._mem_conn.close()
+                self._mem_conn = None
 
     # ── Devices ───────────────────────────────────────────────────────────────
 
@@ -159,8 +201,9 @@ class InventoryStore:
 
     def list_devices(self) -> list[DeviceRecord]:
         with self._conn() as conn:
-            rows = conn.execute("SELECT * FROM devices ORDER BY hostname").fetchall()
-        return [self.get_device(r["hostname"]) for r in rows]
+            rows = conn.execute("SELECT hostname FROM devices ORDER BY hostname").fetchall()
+        devices = (self.get_device(row["hostname"]) for row in rows)
+        return [device for device in devices if device is not None]
 
     # ── Interfaces ────────────────────────────────────────────────────────────
 
@@ -212,7 +255,7 @@ class InventoryStore:
         result = []
         for row in rows:
             iface = _row_to_iface(row)
-            if (iface.access_vlan == vlan_id or vlan_id in iface.trunk_vlans):
+            if iface.access_vlan == vlan_id or vlan_id in iface.trunk_vlans:
                 result.append(iface)
         return result
 
@@ -258,15 +301,20 @@ class InventoryStore:
 
     # ── Provisioning jobs ─────────────────────────────────────────────────────
 
-    def write_job(self, job: ProvisioningJob) -> None:
+    def write_job(self, job: ProvisioningJob, idempotency_key: Optional[str] = None) -> None:
         req = job.request
+        job.steps_total = len(job.steps)
         with self._conn() as conn:
             conn.execute("""
-                INSERT OR REPLACE INTO provisioning_jobs
+                INSERT INTO provisioning_jobs
                     (job_id, vlan_id, vlan_name, switches, add_to_trunks,
-                     access_ports, requested_by, status, steps,
-                     created_at, completed_at, error)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                     access_ports, requested_by, status, steps, steps_total,
+                     created_at, completed_at, error, idempotency_key)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(job_id) DO UPDATE SET
+                    status=excluded.status, steps=excluded.steps,
+                    steps_total=excluded.steps_total,
+                    completed_at=excluded.completed_at, error=excluded.error
             """, (
                 job.job_id, req.vlan_id, req.name,
                 json.dumps(req.switches),
@@ -274,9 +322,11 @@ class InventoryStore:
                 json.dumps(req.access_ports),
                 req.requested_by, job.status.value,
                 json.dumps([_step_to_dict(s) for s in job.steps]),
+                job.steps_total,
                 job.created_at.isoformat() if job.created_at else None,
                 job.completed_at.isoformat() if job.completed_at else None,
                 job.error,
+                idempotency_key,
             ))
 
     def get_job(self, job_id: str) -> Optional[ProvisioningJob]:
@@ -286,13 +336,54 @@ class InventoryStore:
             ).fetchone()
         return _row_to_job(row) if row else None
 
-    def list_jobs(self, limit: int = 50) -> list[ProvisioningJob]:
+    def get_job_by_idempotency_key(self, key: str) -> Optional[ProvisioningJob]:
         with self._conn() as conn:
-            rows = conn.execute(
-                "SELECT * FROM provisioning_jobs ORDER BY created_at DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
-        return [_row_to_job(r) for r in rows]
+            row = conn.execute(
+                "SELECT * FROM provisioning_jobs WHERE idempotency_key=?", (key,)
+            ).fetchone()
+        return _row_to_job(row) if row else None
+
+    def list_jobs(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+        status: Optional[str] = None,
+    ) -> list[ProvisioningJob]:
+        """List jobs without their step payload (call get_job for detail)."""
+        query = "SELECT * FROM provisioning_jobs"
+        params: list = []
+        if status:
+            query += " WHERE status=?"
+            params.append(status)
+        query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+        params.extend([limit, offset])
+
+        with self._conn() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [_row_to_job(r, with_steps=False) for r in rows]
+
+    def count_jobs(self, status: Optional[str] = None) -> int:
+        query = "SELECT COUNT(*) AS n FROM provisioning_jobs"
+        params: list = []
+        if status:
+            query += " WHERE status=?"
+            params.append(status)
+        with self._conn() as conn:
+            return int(conn.execute(query, params).fetchone()["n"])
+
+    def stats(self) -> dict[str, int]:
+        tables = ("devices", "interfaces", "vlans", "provisioning_jobs")
+        with self._conn() as conn:
+            counts = {
+                table: int(conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()["n"])
+                for table in tables
+            }
+        return {
+            "devices":    counts["devices"],
+            "interfaces": counts["interfaces"],
+            "vlans":      counts["vlans"],
+            "jobs":       counts["provisioning_jobs"],
+        }
 
 
 # ── Row converters ────────────────────────────────────────────────────────────
@@ -317,36 +408,46 @@ def _row_to_iface(row: sqlite3.Row) -> InterfaceRecord:
 
 def _step_to_dict(step: OperationStep) -> dict:
     return {
-        "device":       step.device,
-        "operation":    step.operation.value,
-        "interface":    step.interface,
-        "vlan_id":      step.vlan_id,
-        "vlan_name":    step.vlan_name,
-        "command":      step.command,
-        "output":       step.output,
-        "success":      step.success,
-        "error":        step.error,
-        "timestamp":    step.timestamp.isoformat() if step.timestamp else None,
-        "rollback_cmd": step.rollback_cmd,
+        "device":           step.device,
+        "operation":        step.operation.value,
+        "interface":        step.interface,
+        "vlan_id":          step.vlan_id,
+        "vlan_name":        step.vlan_name,
+        "command":          step.command,
+        "output":           step.output,
+        "success":          step.success,
+        "error":            step.error,
+        "timestamp":        step.timestamp.isoformat() if step.timestamp else None,
+        "rollback_cmd":     step.rollback_cmd,
+        "rollback_note":    step.rollback_note,
+        "rollback_applied": step.rollback_applied,
+        "rollback_error":   step.rollback_error,
     }
 
 
-def _row_to_job(row: sqlite3.Row) -> ProvisioningJob:
+def _row_to_job(row: sqlite3.Row, with_steps: bool = True) -> ProvisioningJob:
     from models import VLANProvisionRequest
-    steps_raw = json.loads(row["steps"])
-    steps = [OperationStep(
-        device       = s["device"],
-        operation    = OperationType(s["operation"]),
-        interface    = s["interface"],
-        vlan_id      = s["vlan_id"],
-        vlan_name    = s["vlan_name"],
-        command      = s["command"],
-        output       = s["output"],
-        success      = s["success"],
-        error        = s["error"],
-        timestamp    = datetime.fromisoformat(s["timestamp"]) if s["timestamp"] else None,
-        rollback_cmd = s.get("rollback_cmd", ""),
-    ) for s in steps_raw]
+
+    keys = row.keys()
+    steps: list[OperationStep] = []
+    if with_steps:
+        for s in json.loads(row["steps"]):
+            steps.append(OperationStep(
+                device           = s["device"],
+                operation        = OperationType(s["operation"]),
+                interface        = s["interface"],
+                vlan_id          = s["vlan_id"],
+                vlan_name        = s["vlan_name"],
+                command          = s["command"],
+                output           = s["output"],
+                success          = s["success"],
+                error            = s["error"],
+                timestamp        = datetime.fromisoformat(s["timestamp"]) if s["timestamp"] else None,
+                rollback_cmd     = s.get("rollback_cmd", ""),
+                rollback_note    = s.get("rollback_note", ""),
+                rollback_applied = bool(s.get("rollback_applied", False)),
+                rollback_error   = s.get("rollback_error", ""),
+            ))
 
     return ProvisioningJob(
         job_id  = row["job_id"],
@@ -360,6 +461,7 @@ def _row_to_job(row: sqlite3.Row) -> ProvisioningJob:
         ),
         status       = JobStatus(row["status"]),
         steps        = steps,
+        steps_total  = row["steps_total"] if "steps_total" in keys else len(steps),
         created_at   = datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
         completed_at = datetime.fromisoformat(row["completed_at"]) if row["completed_at"] else None,
         error        = row["error"],

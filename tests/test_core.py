@@ -3,17 +3,26 @@ NetProvision tests.
 All tests run without SSH — engine logic, validation, and store are fully testable.
 """
 
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from datetime import datetime, timezone
-from models import (
-    VLANProvisionRequest, DeviceCredentials, DeviceType,
-    DeviceRecord, InterfaceRecord, VLANRecord,
-    InterfaceMode, InterfaceStatus, VLANStatus, OperationType,
-)
+
 from inventory.store import InventoryStore
-from provisioner.engine import validate, build_plan
+from models import (
+    DeviceCredentials,
+    DeviceRecord,
+    DeviceType,
+    InterfaceMode,
+    InterfaceRecord,
+    InterfaceStatus,
+    OperationType,
+    VLANProvisionRequest,
+    VLANRecord,
+)
+from provisioner.engine import build_plan, validate
 
 
 def _store():
@@ -106,6 +115,38 @@ def test_duplicate_vlan_rejected():
     assert any("already exists" in e for e in errors)
 
 
+def test_request_with_no_targets_rejected():
+    errors = validate(
+        _req(switches=[], add_to_trunks=[], access_ports=[]),
+        _store(), _device_map(),
+    )
+    assert any("no target" in e.lower() for e in errors)
+
+
+def test_trunk_host_without_vlan_is_rejected():
+    # SW-ACCESS is not in 'switches', so it must already carry the VLAN.
+    errors = validate(
+        _req(switches=["SW-CORE"], access_ports=["SW-ACCESS:Fa0/5"]),
+        _store(), _device_map(),
+    )
+    assert any("does not exist on 'SW-ACCESS'" in e for e in errors)
+
+
+def test_trunk_host_with_existing_vlan_is_allowed():
+    store = _store()
+    store.upsert_vlan(VLANRecord(vlan_id=40, name="Finance", device="SW-ACCESS"))
+    errors = validate(
+        _req(switches=["SW-CORE"], access_ports=["SW-ACCESS:Fa0/5"]),
+        store, _device_map(),
+    )
+    assert errors == []
+
+
+def test_vlan_4094_is_in_range():
+    errors = validate(_req(vlan_id=4094), _store(), _device_map())
+    assert not any("out of range" in e for e in errors)
+
+
 # ── Plan builder ──────────────────────────────────────────────────────────────
 
 def test_plan_has_correct_step_count():
@@ -118,7 +159,6 @@ def test_plan_creates_vlan_first():
     steps = build_plan(_req())
     create_steps = [s for s in steps if s.operation == OperationType.VLAN_CREATE]
     trunk_steps  = [s for s in steps if s.operation == OperationType.TRUNK_ADD_VLAN]
-    access_steps = [s for s in steps if s.operation == OperationType.ACCESS_SET_VLAN]
 
     # All create steps come before trunk and access steps
     last_create = max(steps.index(s) for s in create_steps)
@@ -157,9 +197,56 @@ def test_plan_commands_contain_vlan_id():
 
 
 def test_plan_rollback_commands_present():
-    steps = build_plan(_req())
+    prior = {
+        ("SW-CORE", "Gi0/1"): InterfaceRecord(
+            device="SW-CORE", name="Gi0/1", mode=InterfaceMode.TRUNK,
+            trunk_vlans=[10, 20],
+        ),
+        ("SW-ACCESS", "Gi0/1"): InterfaceRecord(
+            device="SW-ACCESS", name="Gi0/1", mode=InterfaceMode.TRUNK,
+            trunk_vlans=[10, 20],
+        ),
+        ("SW-ACCESS", "Fa0/5"): InterfaceRecord(
+            device="SW-ACCESS", name="Fa0/5", mode=InterfaceMode.ACCESS,
+            access_vlan=20,
+        ),
+    }
+    steps = build_plan(_req(), prior)
     for step in steps:
         assert step.rollback_cmd, f"Step {step.operation} missing rollback command"
+
+
+def test_plan_access_rollback_restores_previous_vlan():
+    prior = {
+        ("SW-ACCESS", "Fa0/5"): InterfaceRecord(
+            device="SW-ACCESS", name="Fa0/5", mode=InterfaceMode.ACCESS,
+            access_vlan=20,
+        ),
+    }
+    steps = build_plan(_req(), prior)
+    access = next(s for s in steps if s.operation == OperationType.ACCESS_SET_VLAN)
+    assert "switchport access vlan 20" in access.rollback_cmd
+    assert "switchport access vlan 1" not in access.rollback_cmd
+
+
+def test_plan_access_rollback_unknown_is_manual():
+    steps = build_plan(_req())
+    access = next(s for s in steps if s.operation == OperationType.ACCESS_SET_VLAN)
+    assert access.rollback_cmd == ""
+    assert "manual" in access.rollback_note.lower()
+
+
+def test_plan_trunk_rollback_skipped_when_vlan_already_allowed():
+    prior = {
+        ("SW-CORE", "Gi0/1"): InterfaceRecord(
+            device="SW-CORE", name="Gi0/1", mode=InterfaceMode.TRUNK,
+            trunk_vlans=[40],
+        ),
+    }
+    steps = build_plan(_req(add_to_trunks=["SW-CORE:Gi0/1"]), prior)
+    trunk = next(s for s in steps if s.operation == OperationType.TRUNK_ADD_VLAN)
+    assert trunk.rollback_cmd == ""
+    assert "already allowed" in trunk.rollback_note
 
 
 def test_plan_trunk_rollback_is_remove():
@@ -266,7 +353,7 @@ def test_store_vlan_exists_on_device():
 
 
 def test_store_job_write_and_read():
-    from models import ProvisioningJob, JobStatus
+    from models import JobStatus, ProvisioningJob
     store = _store()
     req   = _req()
     steps = build_plan(req)

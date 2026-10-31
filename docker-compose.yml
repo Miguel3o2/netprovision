@@ -1,0 +1,17 @@
+services:
+  api:
+    build: .
+    image: netprovision:0.2.0
+    ports:
+      - "8002:8002"
+    volumes:
+      # Your device credentials stay on the host and are mounted read-only.
+      - ./config.yaml:/app/config.yaml:ro
+      - netprovision-data:/app/data
+    environment:
+      NP_LOG_FORMAT: json
+      NP_DB_PATH: /app/data/inventory.db
+    restart: unless-stopped
+
+volumes:
+  netprovision-data:
