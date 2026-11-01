@@ -111,6 +111,19 @@ def run(
     )
     log.info(f"Approval workflow: {'required' if require_approval else 'not required'}")
 
+    queue_mode = (os.getenv("NP_QUEUE_MODE") or "inline").strip().lower()
+    if queue_mode not in ("inline", "worker"):
+        raise SystemExit(
+            f"NP_QUEUE_MODE must be 'inline' or 'worker', got '{queue_mode}'"
+        )
+    if queue_mode == "worker":
+        log.info(
+            "Queue mode: worker — jobs are executed by `python worker.py` "
+            "(or `python main.py --worker`)"
+        )
+    else:
+        log.info("Queue mode: inline — jobs execute in this API process")
+
     store = InventoryStore(path=db_path)
     log.info(f"Inventory store: {db_path}")
     log.info(f"Loaded {len(devices)} device(s) from {config_path}")
@@ -123,7 +136,9 @@ def run(
                 collect(creds, store)
 
         import uvicorn
-        app = build_app(store, device_map, auth_config=auth_config)
+        app = build_app(
+            store, device_map, auth_config=auth_config, queue_mode=queue_mode,
+        )
 
         api_cfg = raw.get("api", {})
         host = host or os.getenv("NP_HOST") or api_cfg.get("host", "0.0.0.0")
@@ -148,13 +163,27 @@ if __name__ == "__main__":
                         default=os.getenv("NP_LOG_FORMAT", "text"))
     parser.add_argument("--collect", action="store_true",
                         help="Collect inventory from all devices before starting")
+    parser.add_argument("--worker", action="store_true",
+                        help="Run the durable job worker instead of the API")
+    parser.add_argument("--once", action="store_true",
+                        help="With --worker: drain the queue and exit")
     args = parser.parse_args()
 
     configure_logging(os.getenv("NP_LOG_LEVEL", "INFO"), args.log_format)
-    run(
-        config_path   = args.config,
-        collect_first = args.collect,
-        db_path       = args.db,
-        host          = args.host,
-        port          = args.port,
-    )
+
+    if args.worker:
+        from worker import run_worker
+        run_worker(
+            config_path   = args.config,
+            db_path       = args.db,
+            once          = args.once,
+            collect_first = args.collect,
+        )
+    else:
+        run(
+            config_path   = args.config,
+            collect_first = args.collect,
+            db_path       = args.db,
+            host          = args.host,
+            port          = args.port,
+        )

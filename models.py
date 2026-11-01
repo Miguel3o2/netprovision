@@ -175,6 +175,15 @@ class ProvisioningJob:
     snapshot:     dict[str, Any]        = field(default_factory=dict)
     verification: list[dict[str, Any]]  = field(default_factory=list)
 
+    # Durable-queue bookkeeping
+    attempts:         int                = 0
+    lease_owner:      str                = ""
+    lease_expires_at: Optional[datetime] = None
+
+    # Deferred rollback (worker mode)
+    rollback_requested_at: Optional[datetime] = None
+    rollback_requested_by: str                = ""
+
     @property
     def verification_passed(self) -> bool:
         return bool(self.verification) and all(c.get("ok") for c in self.verification)

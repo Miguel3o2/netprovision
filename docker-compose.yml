@@ -19,6 +19,26 @@ services:
       NP_API_KEYS: ${NP_API_KEYS:-}
       NP_REQUIRE_APPROVAL: ${NP_REQUIRE_APPROVAL:-false}
       NP_SEPARATION_OF_DUTIES: ${NP_SEPARATION_OF_DUTIES:-true}
+      # Jobs are executed by the worker service below, not by the API process.
+      NP_QUEUE_MODE: ${NP_QUEUE_MODE:-worker}
+    restart: unless-stopped
+
+  worker:
+    build: .
+    image: netprovision:0.3.0
+    command: ["python", "main.py", "--worker"]
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      - netprovision-data:/app/data
+    environment:
+      NP_LOG_FORMAT: json
+      NP_DB_PATH: /app/data/inventory.db
+      NP_QUEUE_MODE: worker
+      NP_LEASE_SECONDS: ${NP_LEASE_SECONDS:-300}
+      NP_WORKER_POLL_SECONDS: ${NP_WORKER_POLL_SECONDS:-2}
+      NP_WORKER_RECLAIM: ${NP_WORKER_RECLAIM:-true}
+    depends_on:
+      - api
     restart: unless-stopped
 
 volumes:

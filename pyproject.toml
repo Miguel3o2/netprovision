@@ -19,6 +19,7 @@ warn_unused_ignores = true
 warn_redundant_casts = true
 files = [
     "main.py",
+    "worker.py",
     "models.py",
     "transport.py",
     "observability.py",

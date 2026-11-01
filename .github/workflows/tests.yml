@@ -32,7 +32,7 @@ jobs:
           pytest -q
           --cov=models --cov=inventory --cov=provisioner --cov=api
           --cov=transport --cov=observability --cov=auth --cov=verify
-          --cov=main
+          --cov=main --cov=worker
           --cov-report=term --cov-fail-under=80
 
       - name: Lint

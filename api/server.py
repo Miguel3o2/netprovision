@@ -131,6 +131,7 @@ def build_app(
     auth_config: Optional[AuthConfig] = None,
     require_approval: Optional[bool] = None,
     separation_of_duties: Optional[bool] = None,
+    queue_mode: Optional[str] = None,
 ) -> "FastAPI":
     if not FASTAPI_AVAILABLE:
         raise RuntimeError("pip install fastapi uvicorn")
@@ -140,6 +141,11 @@ def build_app(
         require_approval = _env_flag("NP_REQUIRE_APPROVAL", False)
     if separation_of_duties is None:
         separation_of_duties = _env_flag("NP_SEPARATION_OF_DUTIES", True)
+    queue_mode = (queue_mode or os.getenv("NP_QUEUE_MODE") or "inline").strip().lower()
+    if queue_mode not in ("inline", "worker"):
+        raise ValueError(
+            f"NP_QUEUE_MODE must be 'inline' or 'worker', got {queue_mode!r}"
+        )
 
     app = FastAPI(
         title="NetProvision",
@@ -166,6 +172,18 @@ def build_app(
             return principal
 
         return dependency
+
+    def dispatch(background_tasks: BackgroundTasks, job: ProvisioningJob) -> str:
+        """
+        Run the job here, or leave it PENDING for a worker to claim.
+
+        Worker mode is the durable path: the API process never touches a
+        device, so it can restart or scale for reads without losing the queue.
+        """
+        if queue_mode == "worker":
+            return "worker"
+        background_tasks.add_task(execute, job, store, device_map)
+        return "inline"
 
     origins = [o.strip() for o in os.getenv("NP_CORS_ORIGINS", "*").split(",") if o.strip()]
     app.add_middleware(
@@ -278,7 +296,17 @@ def build_app(
                 ),
             }
 
-        background_tasks.add_task(execute, job, store, device_map)
+        queue = dispatch(background_tasks, job)
+
+        if queue == "worker":
+            message = (
+                f"VLAN {req.vlan_id} ({req.name}) queued — awaiting a worker"
+            )
+        else:
+            message = (
+                f"Provisioning VLAN {req.vlan_id} ({req.name}) — "
+                f"{len(steps)} steps queued"
+            )
 
         return {
             "job_id":    job.job_id,
@@ -286,7 +314,8 @@ def build_app(
             "steps":     len(steps),
             "warnings":  warnings,
             "requested_by": req.requested_by,
-            "message":   f"Provisioning VLAN {req.vlan_id} ({req.name}) — {len(steps)} steps queued",
+            "queue":     queue,
+            "message":   message,
         }
 
     @app.get("/api/vlans/provision/{job_id}", dependencies=[Depends(require("read"))])
@@ -323,12 +352,17 @@ def build_app(
         job.status           = JobStatus.PENDING
         store.write_job(job)
 
-        background_tasks.add_task(execute, job, store, device_map)
+        queue = dispatch(background_tasks, job)
         return {
             "job_id":      job_id,
             "status":      job.status.value,
             "approved_by": principal.name,
-            "message":     "Approved — provisioning queued",
+            "queue":       queue,
+            "message": (
+                "Approved — queued for a worker"
+                if queue == "worker"
+                else "Approved — provisioning queued"
+            ),
         }
 
     @app.post("/api/vlans/provision/{job_id}/reject")
@@ -356,8 +390,12 @@ def build_app(
         store.write_job(job)
         return {"job_id": job_id, "status": job.status.value, "message": reason}
 
-    @app.post("/api/vlans/provision/{job_id}/rollback", dependencies=[Depends(require("write"))])
-    def rollback_job(job_id: str, background_tasks: BackgroundTasks):
+    @app.post("/api/vlans/provision/{job_id}/rollback")
+    def rollback_job(
+        job_id:           str,
+        background_tasks: BackgroundTasks,
+        principal:        Principal = Depends(require("write")),
+    ):
         job = store.get_job(job_id)
         if not job:
             raise HTTPException(404, f"Job '{job_id}' not found")
@@ -367,8 +405,26 @@ def build_app(
                 f"Job is in state '{job.status.value}' — only FAILED or SUCCESS jobs "
                 f"can be rolled back",
             )
+        if job.rollback_requested_at is not None:
+            raise HTTPException(
+                409,
+                f"Rollback already requested by "
+                f"{job.rollback_requested_by or 'unknown'}",
+            )
+
+        if queue_mode == "worker":
+            if not store.request_rollback(job_id, principal.name):
+                raise HTTPException(
+                    409, "Rollback could not be queued — job state changed",
+                )
+            return {
+                "job_id":  job_id,
+                "queue":   "worker",
+                "message": "Rollback queued for a worker",
+            }
+
         background_tasks.add_task(rollback, job, store, device_map)
-        return {"job_id": job_id, "message": "Rollback queued"}
+        return {"job_id": job_id, "queue": "inline", "message": "Rollback queued"}
 
     # ── Inventory — devices ───────────────────────────────────────────────────
 
@@ -479,12 +535,15 @@ def build_app(
     def readyz():
         try:
             stats = store.stats()
+            jobs_pending = store.count_jobs("pending")
         except Exception as exc:
             raise HTTPException(503, f"inventory store unavailable: {exc}") from exc
         return {
             "status":             "ready",
             "configured_devices": len(device_map),
             "inventory":          stats,
+            "queue_mode":         queue_mode,
+            "jobs_pending":       jobs_pending,
         }
 
     @app.get("/metrics", include_in_schema=False)
@@ -493,6 +552,9 @@ def build_app(
             stats = store.stats()
             METRICS.set("np_inventory_devices", stats["devices"])
             METRICS.set("np_inventory_vlans", stats["vlans"])
+            # Queue depth read from the store, so it is correct even when the
+            # API is not the process executing jobs.
+            METRICS.set("np_jobs_pending", store.count_jobs("pending"))
         except Exception:  # metrics must never fail the scrape
             pass
         return PlainTextResponse(METRICS.render(), media_type="text/plain; version=0.0.4")
@@ -589,6 +651,12 @@ def _job_to_dict(job: ProvisioningJob, include_steps: bool = True) -> dict:
         "approval_comment": job.approval_comment,
         "verified":        job.verification_passed if job.verification else None,
         "verification":    job.verification,
+        "attempts":        job.attempts,
+        "lease_owner":     job.lease_owner or None,
+        "rollback_requested_at": (
+            job.rollback_requested_at.isoformat() if job.rollback_requested_at else None
+        ),
+        "rollback_requested_by": job.rollback_requested_by,
     }
     if include_steps:
         data["steps"] = [

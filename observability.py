@@ -172,6 +172,14 @@ METRICS.declare("np_http_requests_total", "counter",
                 ("method", "route", "status"))
 METRICS.declare("np_jobs_in_flight", "gauge",
                 "Provisioning jobs currently executing")
+METRICS.declare("np_jobs_pending", "gauge",
+                "Approved jobs waiting for a worker")
+METRICS.declare("np_jobs_claimed_total", "counter",
+                "Provisioning jobs claimed from the durable queue")
+METRICS.declare("np_rollbacks_claimed_total", "counter",
+                "Deferred rollbacks claimed from the durable queue")
+METRICS.declare("np_jobs_reclaimed_total", "counter",
+                "Jobs or rollbacks recovered after a worker lease expired")
 METRICS.declare("np_inventory_devices", "gauge",
                 "Devices recorded in the inventory")
 METRICS.declare("np_inventory_vlans", "gauge",

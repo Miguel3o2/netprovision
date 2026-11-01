@@ -19,26 +19,27 @@ requester of a change cannot be the person who approves it.
 config.yaml  (device credentials)
     │
     ▼
-main.py
-    │
+main.py  (API)                         worker.py  (durable queue, optional)
+    │                                     │
     ├── transport.py              the only place that opens SSH sessions
-    │
+    │                                     │
     ├── auth.py                   API keys → roles → permissions
-    │
+    │                                     │
     ├── inventory/collector.py    SSH → show commands → parse → SQLite
-    │   inventory/store.py        SQLite: devices, interfaces, VLANs, jobs
-    │
+    │   inventory/store.py        SQLite: devices, interfaces, VLANs, jobs,
+    │                             claims, leases, deferred rollbacks
+    │                                     │
     ├── provisioner/engine.py
     │     validate()        — VLAN id, name, device, inventory consistency
     │     build_plan()      — pure fn: request → steps + honest rollback cmds
     │     inspect_request() — plan + warnings, reads inventory only (dry run)
     │     execute()         — snapshot, plan order, per-device locks, verify, rollback
     │     rollback()        — reverse applied steps, restore captured state
-    │
+    │                                     │
     ├── verify.py                 pre-change snapshots + post-change assertions
-    │
+    │                                     │
     ├── observability.py          structured logs + Prometheus metrics
-    │
+    │                                     │
     └── api/server.py   FastAPI
           POST /api/vlans/plan                    → dry run: commands + warnings
           POST /api/vlans/provision               → 202 + job_id (Idempotency-Key)
@@ -59,6 +60,11 @@ main.py
           GET  /healthz  /readyz  /metrics
           GET  /                                  → web dashboard
 ```
+
+The API and the worker share SQLite and nothing else. In `NP_QUEUE_MODE=worker`
+the API only writes a `pending` job and returns; the worker claims it with a
+lease, executes it, and writes each step back. The default `inline` mode keeps
+the single-process experience (FastAPI `BackgroundTasks`) for a lab.
 
 ---
 
@@ -85,9 +91,13 @@ export NP_API_KEYS="alice:REPLACE_WITH_RANDOM_TOKEN:operator,bob:REPLACE_WITH_AN
 # Optional: require a second person to approve every change
 export NP_REQUIRE_APPROVAL=true
 
-python main.py --collect   # collect inventory then start API
-# or
-python main.py             # start API without initial collection
+python main.py --collect   # collect inventory, then start the API (inline mode)
+
+# Optional, but recommended outside a lab: the API only enqueues and a
+# separate worker owns device access and survives API restarts.
+export NP_QUEUE_MODE=worker
+python main.py             # terminal 1
+python worker.py           # terminal 2 (or: python main.py --worker)
 
 # Dashboard: http://localhost:8002
 # API docs:  http://localhost:8002/docs
@@ -107,7 +117,11 @@ docker compose up --build
 ```
 
 The image runs as an unprivileged user, keeps the SQLite inventory in a named
-volume, and exposes a `HEALTHCHECK` against `/healthz`.
+volume, and exposes a `HEALTHCHECK` against `/healthz`. Compose starts two
+services: `api` and `worker`. The API defaults to `NP_QUEUE_MODE=worker` there,
+so a request is persisted and executed by the worker container. If you start
+only `api` (`docker compose up api`), jobs stay `pending` until a worker runs —
+that is the correct signal, not a lost job.
 
 ### Configuration
 
@@ -120,6 +134,11 @@ volume, and exposes a `HEALTHCHECK` against `/healthz`.
 | `NP_API_KEYS` | — | `name:token:role` entries, comma-separated |
 | `NP_REQUIRE_APPROVAL` | `false` | New jobs wait as `pending_approval` |
 | `NP_SEPARATION_OF_DUTIES` | `true` | Requester may not approve their own job |
+| `NP_QUEUE_MODE` | `inline` | `inline` (BackgroundTasks) or `worker` (durable queue) |
+| `NP_WORKER_ID` | `hostname:pid` | Worker identity written to the job lease |
+| `NP_LEASE_SECONDS` | `300` | Lease lifetime; heartbeat runs every third of it |
+| `NP_WORKER_POLL_SECONDS` | `2` | Idle poll interval for the worker |
+| `NP_WORKER_RECLAIM` | `true` | Close out jobs whose worker lease expired |
 | `NP_LOG_FORMAT` | `text` | `json` for one-object-per-line logs |
 | `NP_LOG_LEVEL` | `INFO` | Standard logging levels |
 | `NP_CORS_ORIGINS` | `*` | Comma-separated origins for the dashboard |
@@ -158,11 +177,11 @@ top bar; it is stored in that browser's `localStorage` only. `GET /healthz`,
 
 ```bash
 pip install -r requirements-dev.txt
-pytest -q                 # 126 tests, ~8s, no SSH or devices
-python tests/test_core.py # same core suite, no third-party runner needed
+pytest -q                 # 137 tests, ~4s, no SSH or devices
+python tests/test_core.py # 36 core tests, no third-party runner needed
 ```
 
-Coverage is 87% (gate: 80% in CI). The engine is tested end-to-end against a
+Coverage is 84% (gate: 80% in CI). The engine is tested end-to-end against a
 fake transport (`tests/fakes.py`) that simulates IOS state — VLAN table, access
 VLANs, trunk allowed lists — so apply, verification, and rollback are exercised
 as one loop without touching firmware. Parsers are tested against realistic
@@ -254,6 +273,56 @@ that is not `pending_approval` is also `409`; approving without the permission i
 `GET /api/vlans/provision/{job_id}` for the audit trail. Approval only queues the
 job; the approver's name is not a substitute for the requester's evidence.
 
+### Queue & workers
+
+`NP_QUEUE_MODE` decides who executes a job:
+
+| Mode | Behaviour | Use |
+|---|---|---|
+| `inline` (default) | The API persists the job, then runs it in FastAPI `BackgroundTasks`. | Lab, tests, single process. |
+| `worker` | The API persists the job as `pending` and returns. `python worker.py` claims and executes it. | Anything you would leave running. |
+
+Both modes share the same SQLite store. A claim is a conditional update under
+SQLite's write lock (`BEGIN IMMEDIATE`) plus a lease, so two workers cannot claim
+the same job; the loser simply gets the next one. Claims increment `attempts` and
+set `lease_owner`/`lease_expires_at`; a heartbeat thread renews the lease every
+third of `NP_LEASE_SECONDS` while the job runs, and the lease is cleared when it
+finishes. `GET /api/vlans/provision/{job_id}` exposes `attempts`, `lease_owner`,
+and the rollback request fields.
+
+```bash
+python worker.py                 # poll forever, Ctrl-C finishes the current job
+python worker.py --once          # drain the queue and exit (cron / smoke test)
+python main.py --worker          # same worker, reusing main.py config flags
+```
+
+**Crash recovery is deliberately conservative.** If a worker dies, its lease
+expires. The next pass marks the job `failed` with an error naming the dead
+worker and pointing at the stored snapshot and steps. It does **not** replay the
+job automatically and does **not** auto-rollback, because a lease expiry cannot
+tell "crashed" from "partitioned": the original worker might still be alive and
+mid-change. Two writers on one switch is worse than a human reviewing the
+evidence. Once the state is verified, the normal rollback endpoint reverts the
+recorded steps.
+
+In worker mode, `POST .../rollback` records `rollback_requested_at` and
+`rollback_requested_by` instead of touching a device. The worker claims that
+request under the same lease rules and runs `rollback()`; a crash mid-rollback
+leaves a stale lease which is cleared on the next pass, and retry is safe because
+steps already reverted are marked `rollback_applied`.
+
+Queue state is observable without opening SQLite: `/readyz` reports `queue_mode`
+and `jobs_pending`, and `/metrics` exposes `np_jobs_pending`,
+`np_jobs_claimed_total`, `np_rollbacks_claimed_total`, and
+`np_jobs_reclaimed_total`.
+
+**Limits, stated plainly.** Run exactly one worker process. Per-device locks and
+VLAN claims are still in-process, so two workers could target the same switch
+with two different jobs even though they would never claim the same job. SQLite
+in WAL mode is fine for one host and a handful of processes; it is not a
+distributed queue. Postgres plus distributed device locks are the next step, not
+something this README claims today.
+
 ### What that does on the devices
 
 **SW-CORE and SW-ACCESS** (VLAN_CREATE):
@@ -294,6 +363,10 @@ triggered manually for a finished job:
 ```bash
 curl -X POST http://localhost:8002/api/vlans/provision/{job_id}/rollback
 ```
+
+In `NP_QUEUE_MODE=worker` this records a rollback request and the worker executes
+it, so the API process never opens an SSH session. A second request while one is
+outstanding is `409`.
 
 Rollback is plan-time, not guesswork. At plan time the engine captures the
 interface's current state from the inventory and computes the exact inverse:
@@ -413,6 +486,7 @@ steps that already ran.
 ```
 netprovision/
 ├── main.py                     Entry point — logging, config, API server
+├── worker.py                   Durable queue worker — claims, leases, recovery
 ├── models.py                   Dataclasses: DeviceCredentials, ProvisioningJob, ...
 ├── transport.py                The only module that opens SSH sessions
 ├── observability.py            JSON logging + Prometheus metrics registry
@@ -437,6 +511,7 @@ netprovision/
 │   ├── test_verification.py    Snapshots, post-change checks, silent failure
 │   ├── test_collector_parsing.py  Column-aware show-output parsers
 │   ├── test_store_jobs.py      Migrations, idempotency, pagination
+│   ├── test_queue.py           Claims, leases, recovery, worker-mode dispatch
 │   ├── test_api.py             HTTP contract (TestClient)
 │   └── fakes.py                IOS simulator used by the engine tests
 ├── Dockerfile / docker-compose.yml
@@ -468,10 +543,16 @@ This is a lab / portfolio project — read before exposing it anywhere:
   reverted in startup-config too. Post-change verification catches a device that
   silently ignored commands, but a process crash *between* the last applied step
   and the rollback still leaves the running/startup config ahead of the intended
-  state. The stored pre-change snapshot is what makes that recoverable.
-- **Single process only**: the job queue is FastAPI `BackgroundTasks`, and the
-  device/VLAN locks are in-process. A durable worker queue, Postgres, and
-  multi-worker support are Phase 2. Do not run multiple uvicorn workers yet.
+  state. The stored pre-change snapshot is what makes that recoverable. Worker
+  mode does not change this: an expired lease marks the job failed for review
+  rather than guessing, because the original worker might still be alive.
+- **Run one worker process.** The durable lease prevents two workers claiming the
+  same *job* and lets the API restart without losing queued work, but the
+  per-device locks and VLAN claims are still in-process: two workers could target
+  the same switch with two different jobs. SQLite + WAL is single-host; do not put
+  it on NFS. Horizontal scaling needs Postgres and distributed device locks.
+  Inline mode keeps FastAPI `BackgroundTasks` and must not run under multiple
+  uvicorn workers either.
 - **Approval is workflow evidence, not a security boundary against a malicious
   admin.** An `admin` can perform both `write` and `approve`; separation of
   duties prevents the common case (same person approving their own change), not
@@ -513,6 +594,11 @@ Python · Netmiko · FastAPI · SQLite · IOS automation
   a different authenticated person releases it, with approver, timestamp, and
   comment stored on the job.
 
+• Added a durable SQLite-backed job queue alongside the inline path: atomic
+  claims, per-job leases renewed by a heartbeat thread, crash recovery for
+  expired leases, and a separate worker process, so an API restart no longer
+  strands approved work. Rollbacks are queued through the same path.
+
 • Added a dry-run endpoint that returns the exact command plan and inventory
   warnings without touching a device, plus idempotency keys, per-device locks,
   and VLAN claims so retries and concurrent jobs cannot double-provision.
@@ -530,7 +616,7 @@ Python · Netmiko · FastAPI · SQLite · IOS automation
 **On the plan/execute separation:**
 > "build_plan() has no side effects — it takes a request and returns a list of
 > steps with the exact IOS commands and their inverse commands. That means I can
-> test every scenario without SSH. The 126 tests run in about eight seconds, and
+> test every scenario without SSH. The 137 tests run in about four seconds, and
 > the failure paths are covered with a fake transport that simulates IOS state.
 > execute() is the only function that touches the network, and it just walks the
 > plan."
