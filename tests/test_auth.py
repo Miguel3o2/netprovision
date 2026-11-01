@@ -32,8 +32,6 @@ def _bearer(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
-# ── Unit: configuration and principals ────────────────────────────────────────
-
 def test_off_mode_treats_everyone_as_admin():
     principal = authenticate(None, AuthConfig())
     assert principal.name == "anonymous"
@@ -95,8 +93,6 @@ def test_roles_are_permission_sets_not_a_hierarchy():
 def test_unknown_role_has_no_permissions():
     assert Principal("nobody", "intern").permissions == frozenset()
 
-
-# ── API: authentication and authorisation ─────────────────────────────────────
 
 @pytest.fixture
 def secured(monkeypatch):

@@ -87,8 +87,6 @@ def _env_flag(name: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-# ── Pydantic request bodies ───────────────────────────────────────────────────
-
 if FASTAPI_AVAILABLE:
     class ProvisionRequest(BaseModel):
         vlan_id:       int        = Field(..., ge=2, le=VLAN_MAX)
@@ -153,7 +151,6 @@ def build_app(
         default_response_class=Utf8JSONResponse,
     )
 
-    # ── Authorisation dependency ──────────────────────────────────────────────
 
     def require(permission: str):
         """Require a permission, mapping auth failures to 401/403."""
@@ -193,7 +190,6 @@ def build_app(
         allow_headers=["Content-Type", "Idempotency-Key", "X-Request-ID", "Authorization"],
     )
 
-    # ── Observability middleware ──────────────────────────────────────────────
 
     @app.middleware("http")
     async def observe(request: Request, call_next):
@@ -213,7 +209,6 @@ def build_app(
             })
             reset_request_id(token)
 
-    # ── Provisioning — dry run ────────────────────────────────────────────────
 
     @app.post("/api/vlans/plan", dependencies=[Depends(require("read"))])
     def plan_vlan(body: "ProvisionRequest"):
@@ -233,7 +228,6 @@ def build_app(
             "warnings":         warnings,
         }
 
-    # ── Provisioning — apply ──────────────────────────────────────────────────
 
     @app.post("/api/vlans/provision", status_code=202)
     def provision_vlan(
@@ -254,7 +248,6 @@ def build_app(
 
         req = _to_request(body)
         if auth_config.enabled:
-            # The authenticated identity wins over a client-supplied string.
             req.requested_by = principal.name
 
         errors = validate(req, store, device_map)
@@ -275,7 +268,6 @@ def build_app(
         try:
             store.write_job(job, idempotency_key=idempotency_key)
         except sqlite3.IntegrityError:
-            # Lost a race with an identical request: replay the winner.
             existing = store.get_job_by_idempotency_key(idempotency_key) if idempotency_key else None
             if not existing:
                 raise
@@ -325,7 +317,6 @@ def build_app(
             raise HTTPException(404, f"Job '{job_id}' not found")
         return _job_to_dict(job)
 
-    # ── Approval workflow ─────────────────────────────────────────────────────
 
     @app.post("/api/vlans/provision/{job_id}/approve")
     def approve_job(
@@ -426,7 +417,6 @@ def build_app(
         background_tasks.add_task(rollback, job, store, device_map)
         return {"job_id": job_id, "queue": "inline", "message": "Rollback queued"}
 
-    # ── Inventory — devices ───────────────────────────────────────────────────
 
     @app.get("/api/inventory/devices", dependencies=[Depends(require("read"))])
     def list_devices():
@@ -466,7 +456,6 @@ def build_app(
             raise HTTPException(404, f"Device '{hostname}' not in inventory")
         return [_vlan_to_dict(v) for v in store.get_vlans(device=hostname)]
 
-    # ── Inventory — VLANs ─────────────────────────────────────────────────────
 
     @app.get("/api/inventory/vlans", dependencies=[Depends(require("read"))])
     def list_vlans(device: Optional[str] = None):
@@ -489,7 +478,6 @@ def build_app(
     def interfaces_for_vlan(vlan_id: int):
         return [_iface_to_dict(i) for i in store.find_interfaces_by_vlan(vlan_id)]
 
-    # ── Inventory refresh ─────────────────────────────────────────────────────
 
     @app.post("/api/inventory/refresh/{hostname}", dependencies=[Depends(require("write"))])
     def refresh_inventory(hostname: str, background_tasks: BackgroundTasks):
@@ -500,7 +488,6 @@ def build_app(
         background_tasks.add_task(collect, creds, store)
         return {"hostname": hostname, "message": "Inventory refresh queued"}
 
-    # ── Jobs ──────────────────────────────────────────────────────────────────
 
     @app.get("/api/jobs", dependencies=[Depends(require("read"))])
     def list_jobs(
@@ -525,7 +512,6 @@ def build_app(
             raise HTTPException(404, f"Job '{job_id}' not found")
         return _job_to_dict(job)
 
-    # ── Health & metrics ──────────────────────────────────────────────────────
 
     @app.get("/healthz", include_in_schema=False)
     def healthz():
@@ -552,14 +538,11 @@ def build_app(
             stats = store.stats()
             METRICS.set("np_inventory_devices", stats["devices"])
             METRICS.set("np_inventory_vlans", stats["vlans"])
-            # Queue depth read from the store, so it is correct even when the
-            # API is not the process executing jobs.
             METRICS.set("np_jobs_pending", store.count_jobs("pending"))
-        except Exception:  # metrics must never fail the scrape
+        except Exception:
             pass
         return PlainTextResponse(METRICS.render(), media_type="text/plain; version=0.0.4")
 
-    # ── Dashboard ─────────────────────────────────────────────────────────────
     web_dir = os.path.join(os.path.dirname(__file__), "..", "web")
     if os.path.isdir(web_dir):
         @app.get("/", include_in_schema=False)
@@ -568,8 +551,6 @@ def build_app(
 
     return app
 
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _valid_idempotency_key(key: str) -> bool:
     return re.match(IDEMPOTENCY_KEY_RE, key) is not None

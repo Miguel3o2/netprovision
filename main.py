@@ -19,7 +19,6 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-# Windows consoles default to cp1252; log messages contain em dashes.
 for _stream in (sys.stdout, sys.stderr):
     _reconfigure = getattr(_stream, "reconfigure", None)
     if _reconfigure is not None:

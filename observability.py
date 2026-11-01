@@ -18,8 +18,6 @@ import time
 from datetime import datetime, timezone
 from typing import Mapping, Optional, Sequence
 
-# ── Request-scoped context ────────────────────────────────────────────────────
-
 _job_id: contextvars.ContextVar[str] = contextvars.ContextVar("job_id", default="")
 _request_id: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="")
 
@@ -43,8 +41,6 @@ def set_request_id(request_id: Optional[str]):
 def reset_request_id(token) -> None:
     _request_id.reset(token)
 
-
-# ── Logging ───────────────────────────────────────────────────────────────────
 
 class JsonFormatter(logging.Formatter):
     """One JSON object per log record, with job/request ids when available."""
@@ -78,13 +74,10 @@ def configure_logging(level: str = "INFO", fmt: str = "text") -> None:
     root.handlers[:] = [handler]
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
 
-    # uvicorn installs its own handlers; route them through the same config.
     for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
         logging.getLogger(name).handlers[:] = []
         logging.getLogger(name).propagate = True
 
-
-# ── Metrics ───────────────────────────────────────────────────────────────────
 
 def _escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')

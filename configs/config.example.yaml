@@ -1,16 +1,3 @@
-# NetProvision Configuration — EXAMPLE
-#
-# Copy this file to config.yaml in the project root and edit the values:
-#     cp configs/config.example.yaml config.yaml
-#
-# config.yaml is git-ignored: credentials never belong in the repository.
-#
-# API access control is configured through the environment, not this file:
-#     NP_AUTH_MODE=apikey
-#     NP_API_KEYS="alice:<random-token>:operator,bob:<random-token>:approver"
-#     NP_REQUIRE_APPROVAL=true
-# See README.md → Authentication & roles. Without NP_AUTH_MODE=apikey the API
-# is unauthenticated and logs a warning at startup.
 
 api:
   host: 0.0.0.0
@@ -37,8 +24,6 @@ devices:
       role:   switch
       site:   head-office
 
-  # Routers work too — the provisioner only sends switchport commands
-  # to interfaces you explicitly list as trunks / access ports.
   - hostname:       R1
     ip:             192.168.1.1
     device_type:    cisco_ios

@@ -75,8 +75,6 @@ def _job(request=None, prior=None, job_id="job-1") -> ProvisioningJob:
     )
 
 
-# ── Success path ──────────────────────────────────────────────────────────────
-
 def test_execute_success_runs_every_step(fake):
     store = _store()
     job = _job()
@@ -116,8 +114,6 @@ def test_execute_runs_in_plan_order(fake):
     assert create_index < trunk_index < access_index
 
 
-# ── Failure and rollback ──────────────────────────────────────────────────────
-
 def test_execute_rolls_back_automatically_on_failure(fake):
     fake.fail_on["SW-ACCESS"] = "switchport access vlan 40"
     store = _store()
@@ -131,7 +127,7 @@ def test_execute_rolls_back_automatically_on_failure(fake):
     assert access.rollback_applied is False
 
     applied = [s for s in job.steps if s.rollback_applied]
-    assert len(applied) == 4          # everything that succeeded got reverted
+    assert len(applied) == 4
     rollback_output = (
         fake.blocks_for("SW-ACCESS") + fake.blocks_for("SW-CORE")
         + fake.commands_for("SW-ACCESS") + fake.commands_for("SW-CORE")
@@ -177,7 +173,7 @@ def test_rollback_restores_previous_access_vlan(fake):
 
 def test_rollback_flags_unknown_prior_state_as_manual(fake):
     store = _store()
-    job = _job()                      # no inventory snapshot → access prior unknown
+    job = _job()
 
     execute(job, store, _device_map())
     rollback(job, store, _device_map())
@@ -198,8 +194,6 @@ def test_execute_marks_connection_failure(fake):
     assert "connection refused" in (job.error or "")
     assert job.steps_attempted == 1
 
-
-# ── Guards ────────────────────────────────────────────────────────────────────
 
 def test_execute_rejects_conflicting_job(fake):
     store = _store()
@@ -231,8 +225,6 @@ def test_device_locks_are_per_host():
         assert DEVICE_LOCKS._lock_for("SW-CORE").locked()
         assert not DEVICE_LOCKS._lock_for("SW-ACCESS").locked()
 
-
-# ── Command framing and planning ──────────────────────────────────────────────
 
 def test_send_preserves_internal_context_exits():
     conn = FakeConnection()

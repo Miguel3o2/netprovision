@@ -54,8 +54,6 @@ class OperationType(Enum):
     INTERFACE_REFRESH = "interface_refresh"
 
 
-# ── Device ────────────────────────────────────────────────────────────────────
-
 @dataclass
 class DeviceCredentials:
     hostname:      str
@@ -69,8 +67,6 @@ class DeviceCredentials:
     tags:          dict[str, str] = field(default_factory=dict)
 
 
-# ── Inventory ─────────────────────────────────────────────────────────────────
-
 @dataclass
 class VLANRecord:
     vlan_id:    int
@@ -83,7 +79,7 @@ class VLANRecord:
 @dataclass
 class InterfaceRecord:
     device:         str
-    name:           str             # "GigabitEthernet0/0"
+    name:           str
     description:    str             = ""
     mode:           InterfaceMode   = InterfaceMode.UNKNOWN
     status:         InterfaceStatus = InterfaceStatus.UNKNOWN
@@ -102,7 +98,7 @@ class DeviceRecord:
     hostname:      str
     ip:            str
     device_type:   str
-    platform:      str             = ""   # e.g. "Cisco IOS 15.2"
+    platform:      str             = ""
     serial:        str             = ""
     model:         str             = ""
     uptime:        str             = ""
@@ -111,8 +107,6 @@ class DeviceRecord:
     interfaces:    list[InterfaceRecord] = field(default_factory=list)
     vlans:         list[VLANRecord]      = field(default_factory=list)
 
-
-# ── Provisioning ──────────────────────────────────────────────────────────────
 
 @dataclass
 class VLANProvisionRequest:
@@ -129,9 +123,9 @@ class VLANProvisionRequest:
     """
     vlan_id:         int
     name:            str
-    switches:        list[str]     = field(default_factory=list)  # hostnames
-    add_to_trunks:   list[str]     = field(default_factory=list)  # "hostname:interface"
-    access_ports:    list[str]     = field(default_factory=list)  # "hostname:interface"
+    switches:        list[str]     = field(default_factory=list)
+    add_to_trunks:   list[str]     = field(default_factory=list)
+    access_ports:    list[str]     = field(default_factory=list)
     description:     str           = ""
     requested_by:    str           = "api"
 
@@ -144,13 +138,13 @@ class OperationStep:
     interface:      Optional[str]
     vlan_id:        int
     vlan_name:      str             = ""
-    command:        str             = ""   # the IOS command sent
-    output:         str             = ""   # device response
+    command:        str             = ""
+    output:         str             = ""
     success:        bool            = False
     error:          Optional[str]   = None
     timestamp:      Optional[datetime] = None
-    rollback_cmd:   str             = ""   # command to undo this step
-    rollback_note:  str             = ""   # why a rollback is manual / skipped
+    rollback_cmd:   str             = ""
+    rollback_note:  str             = ""
     rollback_applied: bool          = False
     rollback_error: str             = ""
 
@@ -164,23 +158,19 @@ class ProvisioningJob:
     created_at:  Optional[datetime]     = None
     completed_at:Optional[datetime]     = None
     error:       Optional[str]          = None
-    steps_total: int                    = 0   # known even when steps are not loaded
+    steps_total: int                    = 0
 
-    # Approval workflow
     approved_by:      str                = ""
     approved_at:      Optional[datetime] = None
     approval_comment: str                = ""
 
-    # Evidence captured around execution
     snapshot:     dict[str, Any]        = field(default_factory=dict)
     verification: list[dict[str, Any]]  = field(default_factory=list)
 
-    # Durable-queue bookkeeping
     attempts:         int                = 0
     lease_owner:      str                = ""
     lease_expires_at: Optional[datetime] = None
 
-    # Deferred rollback (worker mode)
     rollback_requested_at: Optional[datetime] = None
     rollback_requested_by: str                = ""
 

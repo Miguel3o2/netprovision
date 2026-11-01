@@ -7,8 +7,8 @@ extend-exclude = [".venv", "build", "dist", "data"]
 select = ["E", "F", "W", "I", "B"]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["B011"]          # assert False is fine in tests
-"api/server.py" = ["B008"]    # FastAPI dependencies are declared as argument defaults
+"tests/*" = ["B011"]
+"api/server.py" = ["B008"]
 
 [tool.mypy]
 python_version = "3.10"

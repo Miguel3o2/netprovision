@@ -162,8 +162,6 @@ def verify_request(request: VLANProvisionRequest, send: Send) -> list[Check]:
     return checks
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
 def _hosts(request: VLANProvisionRequest) -> list[str]:
     hosts = set(request.switches)
     for ref in request.add_to_trunks + request.access_ports:

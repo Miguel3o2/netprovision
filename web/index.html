@@ -21,7 +21,6 @@
 html{font-size:13px}
 body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh;padding-bottom:32px}
 
-/* ── Topbar ─────────────────────── */
 .topbar{height:50px;background:var(--surface);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 20px;gap:12px;position:sticky;top:0;z-index:30}
 .logo{font-size:15px;font-weight:600;letter-spacing:-.02em}.logo span{color:var(--blue)}
 .nav-tabs{display:flex;gap:0;margin-left:24px}
@@ -33,11 +32,9 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 .clock{font-family:var(--mono);font-size:11px;color:var(--blue)}
 
-/* ── Layout ─────────────────────── */
 .page{max-width:1400px;margin:0 auto;padding:16px 20px}
 .tab-content{display:none}.tab-content.active{display:block}
 
-/* ── Stats ──────────────────────── */
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px}
 .stat{background:var(--panel);border:1px solid var(--border);padding:14px 16px;position:relative;overflow:hidden}
 .stat::before{content:'';position:absolute;top:0;left:0;right:0;height:2px}
@@ -49,16 +46,13 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
 .stat-value.amber{color:var(--amber)}.stat-value.purple{color:var(--purple)}
 .stat-sub{font-family:var(--mono);font-size:9px;color:var(--muted)}
 
-/* ── Grid ───────────────────────── */
 .two-col{display:grid;grid-template-columns:1fr 1fr;gap:14px}
 .three-col{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:14px}
 
-/* ── Panel ──────────────────────── */
 .panel{background:var(--panel);border:1px solid var(--border);margin-bottom:14px}
 .ph{padding:11px 14px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between}
 .ph-title{font-size:12px;font-weight:500}.ph-sub{font-family:var(--mono);font-size:9px;color:var(--muted)}
 
-/* ── Table ──────────────────────── */
 .tbl{width:100%;border-collapse:collapse}
 .tbl th{font-family:var(--mono);font-size:9px;color:var(--muted);padding:6px 14px;text-align:left;border-bottom:1px solid var(--border);letter-spacing:.05em}
 .tbl td{padding:8px 14px;font-size:11px;border-bottom:1px solid rgba(33,38,45,.6)}
@@ -71,7 +65,6 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
 .b-purple{background:var(--purple-bg);color:var(--purple);border:1px solid rgba(188,140,255,.2)}
 .b-muted{background:var(--muted2);color:var(--muted);border:1px solid var(--border2)}
 
-/* ── Form ───────────────────────── */
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:16px}
 .form-group{display:flex;flex-direction:column;gap:5px}
 .form-group.full{grid-column:1/-1}
@@ -90,7 +83,6 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
 .btn-danger{background:transparent;color:var(--red);border-color:rgba(248,81,73,.4)}
 .btn-danger:hover{background:var(--red-bg)}
 
-/* ── Job status ─────────────────── */
 .job-status{display:flex;flex-direction:column;gap:8px;padding:14px}
 .step-row{display:flex;align-items:flex-start;gap:10px;padding:6px 0;border-bottom:1px solid rgba(33,38,45,.4)}
 .step-icon{width:16px;height:16px;border-radius:50%;flex-shrink:0;margin-top:1px;display:flex;align-items:center;justify-content:center;font-size:9px}
@@ -101,12 +93,10 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
 .step-title{font-size:11px;font-weight:500}
 .step-cmd{font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:2px;white-space:pre;overflow-x:auto}
 
-/* ── Footer ─────────────────────── */
 .footer{height:28px;background:var(--surface);border-top:1px solid var(--border);display:flex;align-items:center;padding:0 20px;gap:16px;position:fixed;bottom:0;left:0;right:0;z-index:20}
 .fi{font-family:var(--mono);font-size:9px;color:var(--muted);display:flex;align-items:center;gap:4px}
 .fdot{width:5px;height:5px;border-radius:50%}
 
-/* ── Token ──────────────────────── */
 .token-input{background:var(--surface);border:1px solid var(--border2);color:var(--text);padding:3px 8px;font-family:var(--mono);font-size:10px;width:170px;outline:none;border-radius:2px}
 .token-input:focus{border-color:var(--blue)}
 
@@ -131,7 +121,6 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
   </div>
 </div>
 
-<!-- ── INVENTORY TAB ──────────────────────────────────────────── -->
 <div class="page tab-content active" id="tab-inventory">
   <div class="stats">
     <div class="stat blue"><div class="stat-label">DEVICES</div><div class="stat-value blue" id="s-devices">0</div><div class="stat-sub">in inventory</div></div>
@@ -162,7 +151,6 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
   </div>
 </div>
 
-<!-- ── VLANs TAB ──────────────────────────────────────────────── -->
 <div class="page tab-content" id="tab-vlans">
   <div class="panel">
     <div class="ph"><span class="ph-title">VLAN Database</span><span class="ph-sub" id="vlan-sub">all devices</span></div>
@@ -173,7 +161,6 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:1
   </div>
 </div>
 
-<!-- ── PROVISION TAB ──────────────────────────────────────────── -->
 <div class="page tab-content" id="tab-provision">
   <div class="two-col">
     <div class="panel" style="margin-bottom:0">
@@ -231,7 +218,6 @@ SW-ACCESS:Gi0/1</textarea>
   </div>
 </div>
 
-<!-- ── JOBS TAB ───────────────────────────────────────────────── -->
 <div class="page tab-content" id="tab-jobs">
   <div class="panel">
     <div class="ph"><span class="ph-title">Provisioning Jobs</span><span class="ph-sub" id="jobs-sub">recent 50</span></div>
@@ -253,7 +239,6 @@ let useAPI = false;
 let currentJobId = null;
 let jobPollTimer = null;
 
-// ── Sim data ──────────────────────────────────────────────────────────────
 const SIM_DEVICES = [
   {hostname:'R1',       ip:'192.168.1.1',  device_type:'cisco_ios', model:'ISR4321', interface_count:5,  vlan_count:0,  trunk_count:1, last_seen:'2026-10-21T08:00:00Z', tags:{role:'router'}},
   {hostname:'SW-CORE',  ip:'192.168.10.2', device_type:'cisco_ios', model:'WS-C2960', interface_count:26, vlan_count:4,  trunk_count:2, last_seen:'2026-10-21T08:00:05Z', tags:{role:'switch'}},
@@ -288,8 +273,6 @@ const SIM_VLANS = [
   {vlan_id:99,name:'NATIVE',device:'SW-ACCESS',status:'active'},
 ];
 
-// ── API helpers ───────────────────────────────────────────────────────────
-// The token is entered in the top bar and kept in this browser only.
 function apiToken(){return localStorage.getItem('np_token')||'';}
 function authHeaders(extra){
   const headers = Object.assign({}, extra||{});
@@ -316,11 +299,9 @@ async function apiPost(path, body) {
   } catch(e){return {ok:false,error:String(e)};}
 }
 
-// ── Clock ─────────────────────────────────────────────────────────────────
 function tick(){document.getElementById('clock').textContent=new Date().toTimeString().slice(0,8);}
 tick();setInterval(tick,1000);
 
-// ── Tabs ──────────────────────────────────────────────────────────────────
 function showTab(name) {
   document.querySelectorAll('.tab-content').forEach(el=>el.classList.remove('active'));
   document.querySelectorAll('.nav-tab').forEach(el=>el.classList.remove('active'));
@@ -333,7 +314,6 @@ function showTab(name) {
   if(name==='jobs')      loadJobs();
 }
 
-// ── Inventory ─────────────────────────────────────────────────────────────
 async function loadInventory() {
   const devices = await apiGet('/api/inventory/devices') || SIM_DEVICES;
   document.getElementById('api-st').textContent = useAPI?'live':'demo mode';
@@ -385,7 +365,6 @@ async function loadInterfaces(hostname) {
   });
 }
 
-// ── VLANs ─────────────────────────────────────────────────────────────────
 async function loadVlans() {
   const vlans = await apiGet('/api/inventory/vlans') || SIM_VLANS;
   document.getElementById('vlan-sub').textContent = vlans.length+' entries';
@@ -403,7 +382,6 @@ async function loadVlans() {
   });
 }
 
-// ── Provision form ────────────────────────────────────────────────────────
 function getFormData() {
   return {
     vlan_id:       parseInt(document.getElementById('f-vid').value),
@@ -419,8 +397,6 @@ async function previewPlan() {
   const body = document.getElementById('plan-body');
   body.textContent = 'Building plan...';
 
-  // The server owns planning: it validates against the inventory and computes
-  // the real rollback commands. Keep exactly one implementation of that logic.
   const result = await apiPost('/api/vlans/plan', getFormData());
   if(!result.ok) {
     const detail = result.data?.detail?.errors || result.data?.detail || result.error || 'request failed';
@@ -543,7 +519,6 @@ async function rejectJob(jobId) {
   if(job) renderJobStatus(job);
 }
 
-// ── Jobs tab ──────────────────────────────────────────────────────────────
 async function loadJobs() {
   const data = await apiGet('/api/jobs?limit=50');
   const jobs = Array.isArray(data) ? data : (data && Array.isArray(data.jobs) ? data.jobs : []);
@@ -576,7 +551,6 @@ async function viewJob(jobId) {
   }
 }
 
-// ── Init ──────────────────────────────────────────────────────────────────
 const tokenInput = document.getElementById('api-token');
 tokenInput.value = apiToken();
 tokenInput.addEventListener('change', () => {

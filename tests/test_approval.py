@@ -35,7 +35,7 @@ def approval(monkeypatch):
     config = AuthConfig(mode="apikey", keys={
         "alice-token": Principal("alice", "operator"),
         "bob-token":   Principal("bob", "approver"),
-        "alice-admin": Principal("alice", "admin"),  # same human, approver rights
+        "alice-admin": Principal("alice", "admin"),
     })
 
     store = InventoryStore(path=":memory:")
@@ -80,8 +80,6 @@ def _reject(client, job_id: str, token: str, comment: str = ""):
     )
 
 
-# ── Request ───────────────────────────────────────────────────────────────────
-
 def test_provision_waits_for_approval_and_does_not_touch_devices(approval):
     client, store = approval
     response = client.post(
@@ -112,8 +110,6 @@ def test_pending_job_appears_in_job_listing(approval):
     assert response.status_code == 200
     assert [job["job_id"] for job in response.json()["jobs"]] == [job_id]
 
-
-# ── Approve ───────────────────────────────────────────────────────────────────
 
 def test_approver_releases_the_job(approval):
     client, store = approval
@@ -185,8 +181,6 @@ def test_unknown_job_is_404(approval):
     assert _approve(client, "no-such-job", "bob-token").status_code == 404
 
 
-# ── Reject ────────────────────────────────────────────────────────────────────
-
 def test_rejection_cancels_the_job_with_a_reason(approval):
     client, store = approval
     job_id = _request(client)
@@ -209,7 +203,6 @@ def test_cancelled_job_cannot_be_approved_or_rolled_back(approval):
     assert _reject(client, job_id, "bob-token").status_code == 200
 
     assert _approve(client, job_id, "bob-token").status_code == 409
-    # alice-admin has write, so the 409 is about state, not permission.
     assert client.post(
         f"/api/vlans/provision/{job_id}/rollback", headers=_bearer("alice-admin"),
     ).status_code == 409

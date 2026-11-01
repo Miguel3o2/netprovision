@@ -1,5 +1,3 @@
-# NetProvision — VLAN Provisioning & Network Inventory API
-# Python 3.10+
 
 PyYAML>=6.0
 netmiko>=4.3

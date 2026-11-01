@@ -69,8 +69,6 @@ def _job(job_id: str = "job-1", status: JobStatus = JobStatus.PENDING) -> Provis
     )
 
 
-# ── Claims ────────────────────────────────────────────────────────────────────
-
 def test_claim_has_exactly_one_winner():
     store = _store()
     store.write_job(_job())
@@ -105,8 +103,6 @@ def test_claim_picks_the_oldest_pending_job():
     assert claimed is not None
     assert claimed.job_id == "job-old"
 
-
-# ── Leases ────────────────────────────────────────────────────────────────────
 
 def test_heartbeat_extends_lease_and_clear_releases_it():
     store = _store()
@@ -145,11 +141,8 @@ def test_expired_lease_is_closed_for_review_not_replayed():
     assert "lease expired" in job.error
     assert "vanished-worker" in job.error
     assert job.lease_owner == ""
-    # Still reviewable / revertible by a human.
     assert store.request_rollback(job.job_id, "alice") is True
 
-
-# ── Worker execution ─────────────────────────────────────────────────────────
 
 def test_worker_executes_a_claimed_job_and_clears_the_lease(fake):
     store = _store()
@@ -191,8 +184,6 @@ def test_worker_executes_a_requested_rollback(fake):
     assert rolled.lease_owner == ""
 
 
-# ── API dispatch ─────────────────────────────────────────────────────────────
-
 @pytest.fixture
 def worker_api(monkeypatch):
     pytest.importorskip("fastapi")
@@ -221,7 +212,6 @@ def test_worker_mode_enqueues_instead_of_executing(worker_api):
 
     response = client.post("/api/vlans/provision", json=BODY, headers={})
 
-    # Approval is on in this fixture, so switch it off by approving first.
     assert response.status_code == 202
     job_id = response.json()["job_id"]
     assert response.json()["status"] == "pending_approval"
@@ -268,7 +258,6 @@ def test_worker_mode_rollback_endpoint_only_requests():
     persisted = store.get_job(job.job_id)
     assert persisted is not None
     assert persisted.rollback_requested_by == "anonymous"
-    # Not rolled back yet: the worker owns device access.
     assert persisted.status is JobStatus.SUCCESS
 
     duplicate = client.post(f"/api/vlans/provision/{job.job_id}/rollback")

@@ -75,7 +75,6 @@ class Worker:
         self.reclaim_expired = reclaim_expired
         self._stop           = threading.Event()
 
-    # ── One pass ──────────────────────────────────────────────────────────────
 
     def reclaim(self) -> int:
         """Close out jobs whose worker stopped heartbeating. Returns a count."""
@@ -94,9 +93,6 @@ class Worker:
                 METRICS.inc("np_jobs_reclaimed_total")
                 log.error(f"{job.job_id}: {error}")
 
-        # An interrupted rollback left the job FAILED/SUCCESS with a stale
-        # lease. Clearing it makes the request claimable again; rollback is
-        # idempotent per step, so a retry is safe.
         for job in self.store.expired_rollback_leases():
             if self.store.release_expired_rollback(job.job_id):
                 reclaimed += 1
@@ -146,9 +142,6 @@ class Worker:
         try:
             execute(job, self.store, self.device_map)
         except Exception as exc:
-            # execute() handles device failures itself; this is for the
-            # unexpected (store errors, bugs). Leave the evidence intact and
-            # let a human decide about a rollback.
             log.exception(f"{job.job_id}: worker failed while executing")
             self.store.fail_interrupted_job(job.job_id, f"worker error: {exc}")
         finally:
@@ -168,14 +161,11 @@ class Worker:
         try:
             rollback(job, self.store, self.device_map)
         except Exception:
-            # The lease stays until it expires; reclaim() then clears it and
-            # the request is retried. Steps already reverted are skipped.
             log.exception(f"{job.job_id}: worker failed while rolling back")
         finally:
             heartbeat.stop()
             self.store.clear_lease(job.job_id, self.worker_id)
 
-    # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def run_forever(self) -> None:
         log.info(
@@ -188,7 +178,6 @@ class Worker:
                 if not self.run_once():
                     self._stop.wait(self.poll_seconds)
             except Exception:
-                # A DB hiccup must not kill the worker; log and back off.
                 log.exception("worker loop error")
                 self._stop.wait(min(self.poll_seconds * 5, 30))
 
@@ -227,12 +216,9 @@ class _Heartbeat(threading.Thread):
                     log.error(f"{self.job_id}: lease lost (expired or reassigned)")
                     return
             except Exception:
-                # Transient store error: keep trying until the lease stops
-                # extending, which is what the reclaim logic looks at.
                 log.exception(f"{self.job_id}: lease heartbeat failed")
 
     def stop(self) -> None:
-        # threading.Thread already owns a `_stop` method; use a distinct name.
         self._stop_event.set()
         self.join(timeout=5)
 
@@ -247,8 +233,6 @@ def run_worker(
     lease_seconds: Optional[int] = None,
     poll_seconds: Optional[float] = None,
 ) -> None:
-    # Config parsing lives in main.py; importing it lazily avoids a cycle when
-    # main.py runs the worker itself.
     from main import load_config, load_devices
 
     raw = load_config(config_path)

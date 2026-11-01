@@ -68,7 +68,6 @@ def test_idempotency_key_lookup_and_preservation():
     store.write_job(job, idempotency_key="req-123")
     assert store.get_job_by_idempotency_key("req-123").job_id == "job-1"
 
-    # Later updates must not clear the key.
     store.write_job(job)
     assert store.get_job_by_idempotency_key("req-123").job_id == "job-1"
 

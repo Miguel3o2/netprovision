@@ -65,8 +65,6 @@ def _job(job_id: str = "job-1") -> ProvisioningJob:
     )
 
 
-# ── Success path ──────────────────────────────────────────────────────────────
-
 def test_successful_job_records_passing_verification(fake):
     store = _store()
     job = _job()
@@ -104,7 +102,6 @@ def test_snapshot_captures_touched_interfaces_before_apply(fake):
 
     access = job.snapshot["SW-ACCESS"]
     assert "VLAN Name" in access["vlan"]
-    # Pre-change state: the interface existed but had no access VLAN yet.
     assert "interface Fa0/5" in access["interfaces"]["Fa0/5"]
     assert "switchport access vlan 40" not in access["interfaces"]["Fa0/5"]
 
@@ -114,7 +111,6 @@ def test_snapshot_captures_touched_interfaces_before_apply(fake):
 
 
 def test_job_detail_exposes_snapshot_and_verification():
-    # Covered through the API elsewhere; this asserts the model contract.
     job = _job()
     job.verification = [{"device": "SW-CORE", "check": "vlan_present", "ok": True}]
     assert job.verification_passed is True
@@ -123,11 +119,7 @@ def test_job_detail_exposes_snapshot_and_verification():
     assert job.verification_passed is False
 
 
-# ── Failure path ──────────────────────────────────────────────────────────────
-
 def test_device_that_ignores_config_is_caught_and_rolled_back(fake):
-    # SW-ACCESS accepts the commands but does not apply them: exactly the case a
-    # "did send_config_set raise?" check would miss.
     fake.deaf.add("SW-ACCESS")
     store = _store()
     job = _job()
@@ -156,8 +148,6 @@ def test_verification_can_be_disabled_for_diagnostic_runs(fake):
 
     execute(job, store, _device_map(), verify_after_apply=False)
 
-    # Without verification the engine reports success — which is precisely why
-    # verification is on by default.
     assert job.status is JobStatus.SUCCESS
     assert job.verification == []
 
@@ -166,15 +156,11 @@ def test_verification_failure_does_not_save_startup_config_on_failure(fake):
     fake.deaf.add("SW-ACCESS")
     execute(_job(), _store(), _device_map())
 
-    # Rollback reconnects and saves the reverted state, so inspect the first
-    # (pre-rollback) session per device.
     first: dict[str, FakeConnection] = {}
     for host, conn in fake.created:
         first.setdefault(host, conn)
     assert first["SW-ACCESS"].saved == 0
 
-
-# ── Unit: parser-level checks ─────────────────────────────────────────────────
 
 def test_verify_request_reports_missing_vlan_and_trunk():
     state = {

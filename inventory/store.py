@@ -94,7 +94,6 @@ CREATE INDEX IF NOT EXISTS idx_jobs_vlan ON provisioning_jobs(vlan_id);
 CREATE INDEX IF NOT EXISTS idx_jobs_created ON provisioning_jobs(created_at);
 """
 
-# Columns added after the first release. Kept additive so old databases migrate.
 MIGRATIONS: dict[str, dict[str, str]] = {
     "provisioning_jobs": {
         "idempotency_key":  "TEXT",
@@ -129,8 +128,6 @@ class InventoryStore:
             return self._mem_conn
         conn = sqlite3.connect(self.path, timeout=10)
         conn.row_factory = sqlite3.Row
-        # The worker and the API are separate processes sharing this file.
-        # Wait for a writer instead of failing immediately.
         conn.execute("PRAGMA busy_timeout=5000")
         return conn
 
@@ -150,7 +147,6 @@ class InventoryStore:
             conn = self._raw_connect()
             try:
                 if not self._memory:
-                    # WAL lets the API read job state while a worker writes it.
                     conn.execute("PRAGMA journal_mode=WAL")
                     conn.execute("PRAGMA synchronous=NORMAL")
                 conn.executescript(SCHEMA)
@@ -183,7 +179,6 @@ class InventoryStore:
                 self._mem_conn.close()
                 self._mem_conn = None
 
-    # ── Devices ───────────────────────────────────────────────────────────────
 
     def upsert_device(self, device: DeviceRecord) -> None:
         with self._conn() as conn:
@@ -226,7 +221,6 @@ class InventoryStore:
         devices = (self.get_device(row["hostname"]) for row in rows)
         return [device for device in devices if device is not None]
 
-    # ── Interfaces ────────────────────────────────────────────────────────────
 
     def upsert_interface(self, iface: InterfaceRecord) -> None:
         with self._conn() as conn:
@@ -280,7 +274,6 @@ class InventoryStore:
                 result.append(iface)
         return result
 
-    # ── VLANs ─────────────────────────────────────────────────────────────────
 
     def upsert_vlan(self, vlan: VLANRecord) -> None:
         with self._conn() as conn:
@@ -320,7 +313,6 @@ class InventoryStore:
             ).fetchone()
         return row is not None
 
-    # ── Provisioning jobs ─────────────────────────────────────────────────────
 
     def write_job(self, job: ProvisioningJob, idempotency_key: Optional[str] = None) -> None:
         req = job.request
@@ -421,7 +413,6 @@ class InventoryStore:
             "jobs":       counts["provisioning_jobs"],
         }
 
-    # ── Durable queue ─────────────────────────────────────────────────────────
 
     def claim_next_job(
         self,
@@ -556,7 +547,6 @@ class InventoryStore:
             )
         return cursor.rowcount == 1
 
-    # ── Durable rollback requests ─────────────────────────────────────────────
 
     def request_rollback(
         self,
@@ -671,8 +661,6 @@ class InventoryStore:
             )
         return cursor.rowcount == 1
 
-
-# ── Row converters ────────────────────────────────────────────────────────────
 
 def _row_to_iface(row: sqlite3.Row) -> InterfaceRecord:
     return InterfaceRecord(

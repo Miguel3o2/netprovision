@@ -24,7 +24,6 @@ BODY = {
 
 @pytest.fixture
 def api(monkeypatch):
-    # The background task is replaced: these tests cover HTTP behaviour only.
     monkeypatch.setattr(server, "execute", lambda job, store, dm, **kw: job)
 
     store = InventoryStore(path=":memory:")
@@ -38,8 +37,6 @@ def api(monkeypatch):
     }
     return TestClient(server.build_app(store, device_map)), store
 
-
-# ── Health, readiness, metrics ────────────────────────────────────────────────
 
 def test_healthz(api):
     client, _ = api
@@ -71,8 +68,6 @@ def test_request_id_is_echoed(api):
     response = client.get("/healthz", headers={"X-Request-ID": "trace-1"})
     assert response.headers["X-Request-ID"] == "trace-1"
 
-
-# ── Dry run ───────────────────────────────────────────────────────────────────
 
 def test_plan_returns_commands_without_creating_a_job(api):
     client, store = api
@@ -107,8 +102,6 @@ def test_plan_rejects_spaces_in_name(api):
     assert response.status_code == 422
     assert "spaces" in str(response.json())
 
-
-# ── Provisioning ──────────────────────────────────────────────────────────────
 
 def test_provision_creates_a_job(api):
     client, store = api
@@ -178,8 +171,6 @@ def test_rollback_rejects_a_pending_job(api):
 
     assert response.status_code == 409
 
-
-# ── Jobs listing ──────────────────────────────────────────────────────────────
 
 def test_jobs_list_is_paginated_and_omits_steps(api):
     client, _ = api

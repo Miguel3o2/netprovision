@@ -60,8 +60,6 @@ class ValidationError(Exception):
     pass
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -89,8 +87,6 @@ def _append_note(existing: Optional[str], note: str) -> str:
     return f"{existing}; {note}" if existing else note
 
 
-# ── Validation ────────────────────────────────────────────────────────────────
-
 def validate(
     request:    VLANProvisionRequest,
     store:      InventoryStore,
@@ -102,7 +98,6 @@ def validate(
     """
     errors: list[str] = []
 
-    # VLAN ID range (1 is the default VLAN, 1002-1005 are reserved by IOS)
     if not (VLAN_MIN <= request.vlan_id <= VLAN_MAX):
         errors.append(
             f"VLAN ID {request.vlan_id} is out of range ({VLAN_MIN}–{VLAN_MAX})"
@@ -110,7 +105,6 @@ def validate(
     if request.vlan_id in RESERVED_VLANS:
         errors.append(f"VLAN {request.vlan_id} is reserved and cannot be provisioned")
 
-    # VLAN name
     if not request.name or not request.name.strip():
         errors.append("VLAN name cannot be empty")
     elif len(request.name) > NAME_MAX_LEN:
@@ -118,11 +112,9 @@ def validate(
     elif " " in request.name:
         errors.append("VLAN name cannot contain spaces (IOS limit)")
 
-    # At least one target
     if not (request.switches or request.add_to_trunks or request.access_ports):
         errors.append("Request has no target devices, trunks or access ports")
 
-    # All referenced devices must be in device_map
     all_devices = set(request.switches)
     for ref in request.add_to_trunks + request.access_ports:
         parsed = _split_ref(ref)
@@ -133,7 +125,6 @@ def validate(
         if hostname not in device_map:
             errors.append(f"Device '{hostname}' not found in config")
 
-    # References must be valid "hostname:interface"
     for ref in request.add_to_trunks:
         if not _split_ref(ref):
             errors.append(f"Trunk reference '{ref}' must be 'hostname:interface'")
@@ -141,7 +132,6 @@ def validate(
         if not _split_ref(ref):
             errors.append(f"Access port reference '{ref}' must be 'hostname:interface'")
 
-    # Duplicate VLAN check on switches we would create it on
     for hostname in request.switches:
         if store.vlan_exists_on_device(hostname, request.vlan_id):
             errors.append(
@@ -149,8 +139,6 @@ def validate(
                 f"remove it from 'switches' list or delete it first"
             )
 
-    # A trunk / access host that is not in 'switches' must already have the VLAN,
-    # otherwise IOS rejects the interface command.
     for ref in request.add_to_trunks + request.access_ports:
         parsed = _split_ref(ref)
         if not parsed:
@@ -166,8 +154,6 @@ def validate(
 
     return errors
 
-
-# ── Plan builder ──────────────────────────────────────────────────────────────
 
 def build_plan(
     request: VLANProvisionRequest,
@@ -191,7 +177,6 @@ def build_plan(
     vid  = request.vlan_id
     name = request.name
 
-    # Step 1: Create VLAN on switches
     for hostname in request.switches:
         steps.append(OperationStep(
             device       = hostname,
@@ -203,7 +188,6 @@ def build_plan(
             rollback_cmd = _cmd_delete_vlan(vid),
         ))
 
-    # Step 2: Add to trunk interfaces
     for ref in request.add_to_trunks:
         hostname, iface = ref.split(":", 1)
         current = prior.get((hostname, iface))
@@ -219,7 +203,6 @@ def build_plan(
             rollback_note= note,
         ))
 
-    # Step 3: Assign to access ports
     for ref in request.access_ports:
         hostname, iface = ref.split(":", 1)
         current = prior.get((hostname, iface))
@@ -267,7 +250,6 @@ def _access_rollback(
         return "", f"{iface} already carried VLAN {vlan_id}; nothing to revert"
     if current.access_vlan is not None:
         return _cmd_access_vlan(iface, current.access_vlan), ""
-    # No explicit access VLAN in the inventory → the device default is VLAN 1.
     return _cmd_access_vlan(iface, 1), ""
 
 
@@ -349,8 +331,6 @@ def inspect_request(
     return steps, warnings
 
 
-# ── IOS command builders ──────────────────────────────────────────────────────
-
 def _cmd_create_vlan(vlan_id: int, name: str) -> str:
     return (
         f"configure terminal\n"
@@ -401,12 +381,8 @@ def _cmd_access_vlan(interface: str, vlan_id: int) -> str:
 
 
 def _cmd_save() -> str:
-    # IOS/IOS-XE. NX-OS needs 'copy running-config startup-config' (Phase 1:
-    # vendor capability model).
     return "write memory"
 
-
-# ── Concurrency primitives ────────────────────────────────────────────────────
 
 class DeviceLocks:
     """One mutex per device, so concurrent jobs serialise per switch."""
@@ -463,8 +439,6 @@ DEVICE_LOCKS = DeviceLocks()
 VLAN_CLAIMS = VlanClaims()
 
 
-# ── Transport helper ──────────────────────────────────────────────────────────
-
 class _Connections:
     """Lazily-opened SSH sessions, reused across a job, closed once."""
 
@@ -485,7 +459,7 @@ class _Connections:
             try:
                 with locks.hold(host):
                     conn.send_command(_cmd_save(), expect_string=r"#")
-            except Exception as exc:  # saving is best-effort, never fails a job
+            except Exception as exc:
                 log.warning(f"{host}: could not save configuration — {exc}")
 
     def close(self) -> None:
@@ -519,8 +493,6 @@ def _send(conn, command: str) -> str:
     return conn.send_config_set(lines)
 
 
-# ── Execution ─────────────────────────────────────────────────────────────────
-
 def execute(
     job:           ProvisioningJob,
     store:         InventoryStore,
@@ -546,7 +518,6 @@ def execute(
     started = time.monotonic()
 
     try:
-        # ── Preconditions ────────────────────────────────────────────────────
         if not transport.NETMIKO_AVAILABLE:
             return _finish(job, store, JobStatus.FAILED, "netmiko not installed")
 
@@ -639,7 +610,7 @@ def execute(
         )
         return job
 
-    except Exception as exc:  # unexpected error must still close out the job
+    except Exception as exc:
         log.exception(f"{job.job_id}: unhandled execution error")
         job.status       = JobStatus.FAILED
         job.error        = _append_note(job.error, f"internal error: {exc}")

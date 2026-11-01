@@ -53,7 +53,6 @@ def test_parse_interfaces_status_keeps_columns_aligned():
     assert ifaces["Gi0/1"].description == "uplink to core"
     assert ifaces["Gi0/2"].access_vlan == 10
     assert ifaces["Gi0/2"].status is InterfaceStatus.DOWN
-    # The Name column contains a space; Vlan must still be read from its column.
     assert ifaces["Fa0/5"].access_vlan == 30
     assert ifaces["Fa0/5"].mode is InterfaceMode.ACCESS
     assert ifaces["Fa0/5"].status is InterfaceStatus.UP

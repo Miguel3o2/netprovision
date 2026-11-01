@@ -55,8 +55,6 @@ def _req(**kwargs):
     return VLANProvisionRequest(**defaults)
 
 
-# ── Validation ────────────────────────────────────────────────────────────────
-
 def test_valid_request_has_no_errors():
     errors = validate(_req(), _store(), _device_map())
     assert errors == []
@@ -124,7 +122,6 @@ def test_request_with_no_targets_rejected():
 
 
 def test_trunk_host_without_vlan_is_rejected():
-    # SW-ACCESS is not in 'switches', so it must already carry the VLAN.
     errors = validate(
         _req(switches=["SW-CORE"], access_ports=["SW-ACCESS:Fa0/5"]),
         _store(), _device_map(),
@@ -147,10 +144,7 @@ def test_vlan_4094_is_in_range():
     assert not any("out of range" in e for e in errors)
 
 
-# ── Plan builder ──────────────────────────────────────────────────────────────
-
 def test_plan_has_correct_step_count():
-    # 2 switches + 2 trunks + 1 access = 5 steps
     steps = build_plan(_req())
     assert len(steps) == 5
 
@@ -160,7 +154,6 @@ def test_plan_creates_vlan_first():
     create_steps = [s for s in steps if s.operation == OperationType.VLAN_CREATE]
     trunk_steps  = [s for s in steps if s.operation == OperationType.TRUNK_ADD_VLAN]
 
-    # All create steps come before trunk and access steps
     last_create = max(steps.index(s) for s in create_steps)
     first_trunk  = min(steps.index(s) for s in trunk_steps) if trunk_steps else 999
     assert last_create < first_trunk
@@ -268,8 +261,6 @@ def test_plan_no_switches_no_create_steps():
     assert len(create_steps) == 0
     assert len(steps) == 1
 
-
-# ── Inventory store ───────────────────────────────────────────────────────────
 
 def test_store_upsert_and_get_device():
     store = _store()

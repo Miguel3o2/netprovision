@@ -101,8 +101,6 @@ def collect(device: DeviceCredentials, store: InventoryStore) -> Optional[Device
     return rec
 
 
-# ── Parsers (pure functions, unit-testable without SSH) ───────────────────────
-
 def parse_version(text: str) -> dict[str, str]:
     result: dict[str, str] = {}
     if m := re.search(r"Cisco IOS(?: XE)?[^\n]*Version\s+([^,\s]+)", text, re.I):
@@ -137,7 +135,6 @@ def parse_interfaces_status(
         data_lines.append(line)
 
     if positions is None:
-        # Truncated capture with no header — fall back to canonical column widths.
         positions = _column_positions(CANONICAL_HEADER, STATUS_COLUMNS)
 
     ifaces: dict[str, InterfaceRecord] = {}
@@ -226,7 +223,6 @@ def apply_trunk_output(
                 discovered  = now,
             )
 
-    # Native VLAN lives in the first trunk table.
     for raw in text.splitlines():
         parts = raw.split()
         if len(parts) >= 5 and IFACE_RE.match(parts[0]) and parts[3].lower() == "trunking":
@@ -304,8 +300,6 @@ def parse_vlans(
         ))
     return vlans
 
-
-# ── Parsing helpers ───────────────────────────────────────────────────────────
 
 def _column_positions(
     header:  str,

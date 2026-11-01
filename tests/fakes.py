@@ -31,14 +31,12 @@ class FakeConnection:
         self.saved = 0
         self.disconnected = False
 
-        # Simulated device state
         self.vlans: dict[int, str] = {}
         self.access: dict[str, int] = {}
         self.trunks: dict[str, set[int]] = {}
         self.modes: dict[str, str] = {}
         self._pending_vlan: Optional[int] = None
 
-    # ── Config path ───────────────────────────────────────────────────────────
 
     def send_config_set(self, lines, **kwargs):
         block = list(lines)
@@ -96,7 +94,6 @@ class FakeConnection:
                     _parse_vlan_range(line.split()[-1])
                 )
 
-    # ── Operational path ──────────────────────────────────────────────────────
 
     def send_command(self, command, expect_string=None, **kwargs):
         self.commands.append(command)
@@ -109,7 +106,6 @@ class FakeConnection:
             self.saved += 1
             return "Building configuration...\n[OK]"
 
-        # Single-line rollbacks are sent through send_command.
         if stripped.startswith("no vlan "):
             self.vlans.pop(int(stripped.split()[2]), None)
             return "ok"
@@ -193,7 +189,6 @@ class FakeConnection:
         lines.append("end")
         return "\n".join(lines)
 
-    # ── Lifecycle ─────────────────────────────────────────────────────────────
 
     def enable(self):
         self.commands.append("enable")
@@ -239,8 +234,6 @@ class FakeTransport:
             for command in conn.commands
         ]
 
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _vlan_row(vlan_id: int, name: str) -> str:
     return f"{vlan_id:<5}{name:<33}{'active':<10}"
